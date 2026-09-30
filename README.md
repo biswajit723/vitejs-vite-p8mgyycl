@@ -1,5 +1,3 @@
-# Reports Generate Tools - Clean Root Project
+# Reports Generate Tools - Connect Excel Folder
 
-This project fixes the duplicate nested-project issue shown in StackBlitz. Import the ZIP as a new project. Do not place the extracted project inside another project folder.
-
-Features: 4193 and 4173 project cards, 16 fixed modules, E3D arrows removed, automatic counts from empty record arrays (currently 0), and clickable Integrated Tool groups below.
+Only one feature was added: Connect Excel Folder. Use Microsoft Edge or Google Chrome, click the button, and select the local `ALL MODULE EXCLE` folder. Counts are read in the browser by summing all numeric values under flexible Overall Count/Overall Value headers. Clicking a report downloads the matching workbook. No backend or Node server is required after deployment.
