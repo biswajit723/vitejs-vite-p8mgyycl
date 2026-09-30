@@ -1,3 +1,8 @@
-# Reports Generate Tools - Connect Excel Folder
+# Reports Generate Tools - Session Folder and Module Download
 
-Only one feature was added: Connect Excel Folder. Use Microsoft Edge or Google Chrome, click the button, and select the local `ALL MODULE EXCLE` folder. Counts are read in the browser by summing all numeric values under flexible Overall Count/Overall Value headers. Clicking a report downloads the matching workbook. No backend or Node server is required after deployment.
+Only two requested behavior changes are included:
+
+1. A separate `Download <Module> Excel` button remains above the report rows for every selected module, even when every report count is 0. It downloads a newly generated Excel containing only the selected module rows while preserving the master headings and column order.
+2. The connected folder, parsed workbooks, and dynamic module list are kept in application memory while the website tab remains open. Moving back to the dashboard and returning to Reports and Status does not require reconnecting the Excel folder. Closing or refreshing the browser tab requires reconnecting for browser-security reasons.
+
+No dashboard, styling, module-count, report-count, Integrated Tool, navigation, or other behavior was changed.
