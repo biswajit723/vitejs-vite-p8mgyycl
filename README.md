@@ -1,5 +1,3 @@
-# Reports Generate Tools Installable PWA
+# Reports Generate Tools
 
-Only the installable-app layer was added. The existing website UI and Excel features are unchanged.
-
-After deployment to Vercel (HTTPS), open the site in Microsoft Edge. Use the install icon in the address bar, or Settings and more > Apps > Install this site as an app.
+Complete installable PWA. The only latest visual adjustment is that automatic count badges are smaller and fixed at the far right side of every selected-module tool button. No other requested behavior was changed.
