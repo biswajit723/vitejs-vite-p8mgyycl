@@ -67,6 +67,51 @@
 /* Requested selected-module count badges and header download button */
 .selected-module-actions{display:flex;align-items:center;gap:12px}.reports>header .header-download-button{min-width:190px;background:#08756c;border-color:#6fd1c8}.selected-module-column>div button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;text-align:left}.selected-module-column>div button span{text-align:center}.selected-module-column>div button b{display:grid;min-width:30px;height:28px;place-items:center;color:#07517e;font-size:12px;font-weight:900;border-radius:7px;background:#fff}@media(max-width:650px){.selected-module-actions{width:100%;align-items:stretch;flex-direction:column}.reports>header .header-download-button{min-width:0;width:100%}}
 
+/* Only requested change: count box stays at the far right inside each applicable button */
+.reports .selected-module-column > div > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  column-gap: 10px;
+  text-align: left;
+}
 
-/* Requested Size Status consolidation and internal download page */
-.selected-module-actions{display:flex;align-items:center;gap:12px}.reports>header .header-download-button{min-width:190px;background:#08756c;border-color:#6fd1c8}.selected-module-column>div button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;text-align:left}.selected-module-column>div button span{text-align:center}.selected-module-column>div button b{display:grid;min-width:30px;height:28px;place-items:center;color:#07517e;font-size:12px;font-weight:900;border-radius:7px;background:#fff}.size-status-page>header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 28px;color:#fff;background:linear-gradient(120deg,#07517e,#087dad)}.size-status-page header p{margin:0 0 6px;color:#a6e2fb;font-size:11px;font-weight:800;letter-spacing:2px}.size-status-page header h2{margin:0;font-size:29px}.size-status-actions{display:flex;gap:12px}.size-status-actions button{padding:10px 16px;color:#fff;font-weight:700;border:1px solid #ffffff66;border-radius:9px;background:#08756c}.size-status-actions button:last-child{background:#ffffff19}.size-status-table-wrap{padding:28px;overflow-x:auto}.size-status-table-wrap table{width:100%;min-width:760px;border-collapse:collapse;background:#fff}.size-status-table-wrap th,.size-status-table-wrap td{padding:11px 14px;text-align:center;border:1px solid #66788c}.size-status-table-wrap thead th:first-child{background:#f1a77a;text-align:left}.size-status-table-wrap thead th:not(:first-child){background:#f4f7fa}.size-status-table-wrap tbody th{text-align:left;background:#f7f9fb}.size-status-table-wrap .grand-total-row th,.size-status-table-wrap .grand-total-row td{font-weight:900;border-top:3px solid #29394a}@media(max-width:650px){.selected-module-actions,.size-status-page>header,.size-status-actions{width:100%;align-items:stretch;flex-direction:column}.reports>header .header-download-button{min-width:0;width:100%}.size-status-table-wrap{padding:16px}}
+.reports .selected-module-column > div > button > span {
+  min-width: 0;
+  text-align: center;
+}
+
+.reports .selected-module-column > div > button > b {
+  display: grid;
+  width: 30px;
+  min-width: 30px;
+  height: 28px;
+  margin: 0;
+  place-items: center;
+  justify-self: end;
+  color: #07517e;
+  font-size: 12px;
+  font-weight: 900;
+  border-radius: 7px;
+  background: #fff;
+}
+
+/* Size Status: Excel-style view only, without a count box on the Size Status button. */
+.size-status-page{min-height:100vh}
+.size-status-top{justify-content:space-between}
+.size-status-heading p{margin:0 0 6px;color:#83dcff;font-size:12px;font-weight:800;letter-spacing:3px}
+.size-status-heading h1{margin:0;font-size:clamp(28px,5vw,42px)}
+.size-status-actions{display:flex;align-items:center;gap:12px}
+.size-status-actions button{min-height:48px;padding:10px 18px;color:#fff;font-weight:800;border:1px solid #fff5;border-radius:10px;background:#178dbd}
+.size-status-actions button:first-child{background:#08756c}
+.size-status-content{padding-top:40px}
+.size-status-table-wrap{overflow-x:auto;border-radius:0}
+.size-status-table{width:100%;min-width:760px;border-collapse:collapse;background:#fff}
+.size-status-table th,.size-status-table td{height:56px;padding:10px 14px;border:1px solid #9aafc2;text-align:center;white-space:nowrap}
+.size-status-table thead th{font-size:15px;font-weight:800;background:#f0f5f9}
+.size-status-table thead th:first-child{background:#f0aa77;text-align:left}
+.size-status-table tbody th{padding-left:18px;text-align:left;font-size:14px;background:#f7f9fb}
+.size-status-table tbody td{font-size:14px}
+.size-status-table tbody tr:not(.size-status-grand) td:last-child,.size-status-table tbody tr:not(.size-status-grand) th:last-child{font-weight:800}
+.size-status-grand th,.size-status-grand td{font-weight:900;border-top:3px solid #293949;background:#f8fafc}
+@media(max-width:650px){.size-status-top{align-items:flex-start;flex-direction:column;gap:16px}.size-status-actions{width:100%}.size-status-actions button{flex:1}.size-status-content{padding-top:24px}}
