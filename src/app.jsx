@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 
 const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management'];
 const REPORTS = ['MTO Report', 'Valve Report', 'Pipe Branch Report', 'Primary Support Report', 'ATTA Report', 'Elbow and Bend Report', 'Equipment Orientation and Position Report', 'Special Item Report', 'Nozzle Report'];
@@ -18,6 +18,14 @@ const isModuleHeader = (value) => {
 const isOverallHeader = (value) => {
   const n = normalize(value);
   return n === 'overall' || n.startsWith('overallcount') || n.startsWith('overallvalue') || (n.includes('overall') && (n.includes('count') || n.includes('value')));
+};
+const isRemarksHeader = (value) => normalize(value).startsWith('remarks');
+const hasMeaningfulRemark = (value) => {
+  if (value === null || value === undefined) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  const n = normalize(text);
+  return !['unset', 'null', 'nil', 'na', 'none', 'noremark', 'noremarks'].includes(n);
 };
 const toNumber = (value) => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -39,8 +47,12 @@ function findHeader(rows) {
     const moduleColumn = row.findIndex(isModuleHeader);
     if (moduleColumn < 0) continue;
     const overallColumns = [];
-    row.forEach((value, index) => { if (isOverallHeader(value)) overallColumns.push(index); });
-    return { rowIndex, moduleColumn, overallColumns };
+    const remarksColumns = [];
+    row.forEach((value, index) => {
+      if (isOverallHeader(value)) overallColumns.push(index);
+      if (isRemarksHeader(value)) remarksColumns.push(index);
+    });
+    return { rowIndex, moduleColumn, overallColumns, remarksColumns };
   }
   return null;
 }
@@ -92,6 +104,46 @@ function countForModule(workbookEntry, moduleName) {
     }
   }
   return total;
+}
+
+function rowHasRemarks(sheetEntry, row) {
+  return (sheetEntry.header?.remarksColumns ?? []).some((columnIndex) => hasMeaningfulRemark(row?.[columnIndex]));
+}
+function mtoWorkbookCandidates(workbooks) {
+  const matched = findReportWorkbook(workbooks, 'MTO Report');
+  if (matched) return [matched];
+  return workbooks.filter((entry) => entry.sheets.some((sheet) => (sheet.header?.remarksColumns?.length ?? 0) > 0));
+}
+function countMtoRemarks(workbooks, moduleName) {
+  let total = 0;
+  for (const entry of mtoWorkbookCandidates(workbooks)) {
+    for (const sheet of entry.sheets) {
+      if (!sheet.header?.remarksColumns?.length) continue;
+      total += rowsForModule(sheet, moduleName).filter((row) => rowHasRemarks(sheet, row)).length;
+    }
+  }
+  return total;
+}
+function copyHeaderFormatting(sourceSheet, outputSheet, headerRowIndex) {
+  const sourceRange = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
+  if (!sourceRange) return;
+  const lastHeaderRow = Math.min(headerRowIndex, sourceRange.e.r);
+  for (let r = sourceRange.s.r; r <= lastHeaderRow; r += 1) {
+    for (let c = sourceRange.s.c; c <= sourceRange.e.c; c += 1) {
+      const address = XLSX.utils.encode_cell({ r, c });
+      const sourceCell = sourceSheet[address];
+      const outputCell = outputSheet[address];
+      if (!sourceCell || !outputCell) continue;
+      if (sourceCell.s) outputCell.s = JSON.parse(JSON.stringify(sourceCell.s));
+      if (sourceCell.z) outputCell.z = sourceCell.z;
+    }
+  }
+  if (sourceSheet['!rows']) {
+    outputSheet['!rows'] = outputSheet['!rows'] ?? [];
+    for (let r = 0; r <= lastHeaderRow; r += 1) {
+      if (sourceSheet['!rows'][r]) outputSheet['!rows'][r] = { ...sourceSheet['!rows'][r] };
+    }
+  }
 }
 
 function safeSheetName(value, usedNames) {
@@ -153,6 +205,29 @@ function createFilteredWorkbook(workbookEntry, moduleName, reportName) {
   }
   if (!output.SheetNames.length) return false;
   XLSX.writeFile(output, `${moduleName} ${reportName}.xlsx`, { compression: true });
+  return true;
+}
+
+function createMtoRemarksWorkbook(workbooks, moduleName) {
+  const output = XLSX.utils.book_new();
+  const usedNames = new Set();
+  let exportedRows = 0;
+  for (const entry of mtoWorkbookCandidates(workbooks)) {
+    for (const sheetEntry of entry.sheets) {
+      if (!sheetEntry.header?.remarksColumns?.length) continue;
+      const matchingRows = rowsForModule(sheetEntry, moduleName).filter((row) => rowHasRemarks(sheetEntry, row));
+      if (!matchingRows.length) continue;
+      const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
+      const outputSheet = XLSX.utils.aoa_to_sheet([...headerRows, ...matchingRows], { cellDates: true });
+      copyHeaderFormatting(sheetEntry.sheet, outputSheet, sheetEntry.header.rowIndex);
+      if (sheetEntry.sheet['!cols']) outputSheet['!cols'] = sheetEntry.sheet['!cols'];
+      if (sheetEntry.sheet['!merges']) outputSheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= sheetEntry.header.rowIndex);
+      XLSX.utils.book_append_sheet(output, outputSheet, safeSheetName(sheetEntry.sheetName, usedNames));
+      exportedRows += matchingRows.length;
+    }
+  }
+  if (!exportedRows) return false;
+  XLSX.writeFile(output, `${moduleName} MTO Report Remarks.xlsx`, { compression: true, cellStyles: true });
   return true;
 }
 
@@ -361,7 +436,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? countForModule(findReportWorkbook(workbooks, item), selected) : 0])), [COUNT_ITEMS, workbooks, selected]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -432,6 +507,10 @@ function Reports({ back, open, excelSession, setExcelSession }) {
 
   const downloadReport = (reportName) => {
     if (!selected) return;
+    if (reportName === 'MTO Report') {
+      if (!createMtoRemarksWorkbook(workbooks, selected)) window.alert(`No ${selected} row with remarks was found for MTO Report.`);
+      return;
+    }
     const workbookEntry = findReportWorkbook(workbooks, reportName);
     if (!workbookEntry) { window.alert(`No master Excel found for ${reportName}.`); return; }
     if (!createFilteredWorkbook(workbookEntry, selected, reportName)) window.alert(`No ${selected} row found for ${reportName}.`);
