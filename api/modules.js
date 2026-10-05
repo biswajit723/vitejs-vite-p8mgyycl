@@ -1,5 +1,3 @@
-const KEY = 'rgt:master-module-list:v1';
-
 function normalizeModules(value) {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
@@ -16,21 +14,48 @@ function normalizeModules(value) {
   return modules;
 }
 
+function getSupabaseUrl() {
+  return (
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    ''
+  ).replace(/\/$/, '');
+}
+
+function getSupabaseServerKey() {
+  // New Supabase projects use a secret key; legacy projects use service_role.
+  return (
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    ''
+  ).trim();
+}
+
 function configError() {
-  return !process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return !getSupabaseUrl() || !getSupabaseServerKey();
 }
 
 function supabaseHeaders() {
+  const key = getSupabaseServerKey();
   return {
-    apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+    apikey: key,
+    Authorization: `Bearer ${key}`,
     'Content-Type': 'application/json',
   };
 }
 
 async function supabaseRequest(path, options = {}) {
-  if (configError()) throw new Error('Supabase environment variables are missing.');
-  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1${path}`, {
+  const url = getSupabaseUrl();
+  const key = getSupabaseServerKey();
+  if (!url || !key) {
+    const missing = [
+      !url ? 'SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)' : null,
+      !key ? 'SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY)' : null,
+    ].filter(Boolean);
+    throw new Error(`Missing Vercel environment variable(s): ${missing.join(', ')}`);
+  }
+  const response = await fetch(`${url}/rest/v1${path}`, {
     ...options,
     headers: {
       ...supabaseHeaders(),
@@ -56,6 +81,7 @@ async function replaceCentralModules(modules) {
   // Atomic replacement is implemented as a Postgres RPC.
   const rows = await supabaseRequest('/rpc/replace_modules', {
     method: 'POST',
+    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({ p_modules: modules }),
   });
   return normalizeModules((rows || []).map((row) => row?.module_name));
@@ -68,7 +94,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ modules, source: 'supabase' });
     } catch (error) {
       console.error('Module GET failed:', error);
-      return res.status(503).json({ error: 'Central module service is not configured or unavailable.' });
+      return res.status(503).json({ error: error instanceof Error ? error.message : 'Central module service is not configured or unavailable.' });
     }
   }
 
@@ -90,7 +116,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ modules: savedModules, source: 'supabase' });
     } catch (error) {
       console.error('Module POST failed:', error);
-      return res.status(503).json({ error: 'Central module service is unavailable.' });
+      return res.status(503).json({ error: error instanceof Error ? error.message : 'Central module service is unavailable.' });
     }
   }
 

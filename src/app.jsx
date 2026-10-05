@@ -252,11 +252,38 @@ function cacheModules(modules) {
 }
 
 async function fetchCentralModules() {
-  const response = await fetch('/api/modules', { headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`Central module service returned ${response.status}`);
-  const data = await response.json();
-  const modules = Array.isArray(data?.modules) ? data.modules.filter((value) => typeof value === 'string' && value.trim()) : [];
-  return { modules, source: data?.source || 'central' };
+  // Primary read path: Vercel server API.
+  try {
+    const response = await fetch('/api/modules', { headers: { Accept: 'application/json' } });
+    if (response.ok) {
+      const data = await response.json();
+      const modules = Array.isArray(data?.modules) ? data.modules.filter((value) => typeof value === 'string' && value.trim()) : [];
+      if (modules.length) return { modules, source: data?.source || 'central-api' };
+    }
+  } catch (error) {
+    console.warn('Central API module read failed; trying Supabase public read.', error);
+  }
+
+  // Fallback read path: directly read the public active module rows from Supabase.
+  // This keeps the module list visible to every browser even if the Vercel function is unavailable.
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) throw new Error('Supabase public read configuration is missing.');
+
+  const response = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/modules?select=module_name,sort_order&active=eq.true&order=sort_order.asc`, {
+    headers: {
+      apikey: supabaseKey,
+      Authorization: `Bearer ${supabaseKey}`,
+      Accept: 'application/json',
+    },
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Supabase module read returned ${response.status}${body ? `: ${body}` : ''}`);
+  }
+  const rows = await response.json();
+  const modules = Array.isArray(rows) ? rows.map((row) => row?.module_name).filter((value) => typeof value === 'string' && value.trim()) : [];
+  return { modules, source: 'supabase-direct' };
 }
 
 async function publishCentralModules(modules, token) {
@@ -384,7 +411,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
           console.error(error);
           try { sessionStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* ignore */ }
           setCentralStatus('offline');
-          window.alert(`Module list was loaded locally, but central publish failed.\n${error.message}`);
+          window.alert(`Module list was loaded locally, but central publish failed.\n\nReason: ${error.message}\n\nCheck the Vercel API environment variables and redeploy.`);
         }
       }
     } catch (error) {
