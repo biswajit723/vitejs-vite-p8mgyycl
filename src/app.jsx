@@ -266,8 +266,8 @@ async function fetchCentralModules() {
 
   // Fallback read path: directly read the public active module rows from Supabase.
   // This keeps the module list visible to every browser even if the Vercel function is unavailable.
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) throw new Error('Supabase public read configuration is missing.');
 
   const response = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/modules?select=module_name,sort_order&active=eq.true&order=sort_order.asc`, {
@@ -411,7 +411,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
           console.error(error);
           try { sessionStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* ignore */ }
           setCentralStatus('offline');
-          window.alert(`Module list was loaded locally, but central publish failed.\n\nReason: ${error.message}\n\nCheck the Vercel API environment variables and redeploy.`);
+          window.alert(`Module list was loaded locally, but central publish failed.\n${error.message}`);
         }
       }
     } catch (error) {

@@ -16,15 +16,3 @@ Required Vercel environment variables:
 - ADMIN_SYNC_TOKEN
 
 Run `supabase.sql` once in Supabase SQL Editor.
-
-
-## Vercel environment variables
-
-Required for the admin publish API:
-- `ADMIN_SYNC_TOKEN`
-- `SUPABASE_SECRET_KEY` (recommended) OR `SUPABASE_SERVICE_ROLE_KEY` (legacy)
-- `SUPABASE_URL` OR `NEXT_PUBLIC_SUPABASE_URL`
-
-For public browser reads, either `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY`, or the existing `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` variables can be used. The Vite config maps the latter into the client build.
-
-After changing Vercel environment variables, redeploy.
