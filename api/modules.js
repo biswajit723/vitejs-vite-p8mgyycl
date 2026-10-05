@@ -26,9 +26,11 @@ function configError() {
 
 function supabaseHeaders() {
   const key = supabaseKey();
+  // Supabase publishable/secret keys are opaque API keys, not JWTs.
+  // They must be sent using the `apikey` header. Sending an sb_secret_*
+  // key as `Authorization: Bearer ...` can trigger an Invalid JWT error.
   return {
     apikey: key,
-    Authorization: `Bearer ${key}`,
     'Content-Type': 'application/json',
   };
 }
