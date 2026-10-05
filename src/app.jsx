@@ -305,13 +305,15 @@ function Reports({ back, open, excelSession, setExcelSession }) {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+
+    const refreshCentralModules = async () => {
       try {
         const result = await fetchCentralModules();
         if (cancelled) return;
         if (result.modules.length) {
           cacheModules(result.modules);
           setExcelSession((current) => ({ ...current, modules: result.modules }));
+          setSelected((current) => result.modules.some((item) => normalize(item) === normalize(current)) ? current : null);
           setCentralStatus('connected');
         } else {
           setCentralStatus('empty');
@@ -320,8 +322,15 @@ function Reports({ back, open, excelSession, setExcelSession }) {
         console.warn('Central module list unavailable; using cached modules.', error);
         if (!cancelled) setCentralStatus('offline');
       }
-    })();
-    return () => { cancelled = true; };
+    };
+
+    refreshCentralModules();
+    const intervalId = window.setInterval(refreshCentralModules, 30000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
   }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
@@ -346,7 +355,8 @@ function Reports({ back, open, excelSession, setExcelSession }) {
           }
         }
       }
-      const dynamicModules = [...moduleMap.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+      // Preserve the module order from the Master Excel.
+      const dynamicModules = [...moduleMap.values()];
       const firstPath = files[0].webkitRelativePath || files[0].name;
       const connectedFolderName = firstPath.includes('/') ? firstPath.split('/')[0] : 'Selected Excel files';
       setExcelSession({ folderName: connectedFolderName, workbooks: parsed, modules: dynamicModules });

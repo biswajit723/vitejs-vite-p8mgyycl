@@ -1,42 +1,57 @@
 # Reports Generate Tools
 
-## Central Master Module List
+## Central Master Module List — Supabase
 
-The app now supports a persistent central module list for deployed environments.
+The Master Excel module list is stored centrally in Supabase so all website users can see the same modules.
 
-### What changed
+### Behavior
 
-- The first successful Master Excel connection still reads the module names exactly as before.
-- The extracted module names are cached locally for offline/browser-reopen fallback.
-- The app also publishes the module names to `/api/modules` when an admin sync token is provided.
-- When any user opens the Reports page, the app first tries to load the centrally stored module list.
-- The same saved module names are therefore shown to users on different computers/browsers after the central service is configured.
-- The current 4-column structure, count boxes, Size Status table, Excel downloads, report logic, colors, and layout are otherwise preserved.
+- Admin connects the Master Excel folder once for a sync.
+- Module names are extracted from the Excel `Module` / `Module Name` column.
+- The Excel order is preserved.
+- The server replaces the central module list atomically in Supabase.
+- All users load the same central module list when opening Reports and Status.
+- An already-open page refreshes the central list every 30 seconds.
+- Browser close/reopen keeps the central list because Supabase is persistent.
+- LocalStorage remains only as a fallback cache when the central service is unavailable.
+- Existing 4-column structure, count boxes, Size Status behavior, Excel downloads, report logic, colors and layout are preserved.
 
-### Required deployment setup
+### Supabase setup
 
-This project uses an Upstash Redis REST endpoint through the Vercel serverless function in `api/modules.js`. No Redis package is required in the browser bundle.
-
-Create a Redis database and add these environment variables to the Vercel project:
+1. Create a Supabase project.
+2. Open **SQL Editor → New query**.
+3. Paste and run the contents of `supabase.sql`.
+4. Go to **Project Settings → API** and copy:
+   - Project URL
+   - service_role key (server-side secret)
+5. Add these environment variables to Vercel:
 
 ```text
-UPSTASH_REDIS_REST_URL=...
-UPSTASH_REDIS_REST_TOKEN=...
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...
 ADMIN_SYNC_TOKEN=...
 ```
 
-See `.env.example` for the variable names.
+6. Redeploy the Vercel project after saving the variables.
 
-### First-time Master Excel publish
+### Master Excel sync
 
-1. Deploy the project with the three environment variables above.
-2. Open the deployed website and go to Reports and Status.
-3. Click **Connect Excel Folder** and select the Master Excel folder.
-4. When prompted for `ADMIN SYNC TOKEN`, enter the same value configured as `ADMIN_SYNC_TOKEN` in Vercel.
-5. The module names are published centrally.
-6. Other users do not need to connect the Excel folder just to see the module list.
-7. Closing/reopening the browser does not remove the central module list.
+1. Open the deployed site.
+2. Go to Reports and Status.
+3. Click **Connect Excel Folder**.
+4. Select the Master Excel folder.
+5. Enter the same `ADMIN_SYNC_TOKEN` configured in Vercel when asked.
+6. The module names are published to Supabase.
+7. All users then receive the same central module list.
+8. Other open pages refresh the module list within about 30 seconds; reopening the website also loads the central list.
+
+### Security
+
+- Do not expose `SUPABASE_SERVICE_ROLE_KEY` in frontend code or any `VITE_*` variable.
+- Only `/api/modules` uses the service-role key.
+- Publishing is protected by `ADMIN_SYNC_TOKEN`.
+- The module table has RLS enabled.
 
 ### Important limitation
 
-The central service stores the **module list**, not the user's local Excel file handles. Browser security prevents one user's local folder permission from being reused by other users. Existing report counts and Excel downloads still use the Excel files available in the current browser session.
+The central service stores the module list, not browser-local Excel file handles. Browser security prevents one user's local folder permission from being reused by other users. Existing report counts and Excel downloads still use Excel files available in the current browser session.
