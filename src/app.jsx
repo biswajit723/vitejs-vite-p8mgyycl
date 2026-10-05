@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 
 const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management'];
@@ -230,11 +230,54 @@ function createSizeStatusWorkbook(moduleName, status) {
   XLSX.writeFile(output, `${moduleName} Size Status.xlsx`, { compression: true });
 }
 
+const MODULE_CACHE_KEY = 'rgt:module-list:v1';
+const ADMIN_TOKEN_KEY = 'rgt:admin-sync-token:v1';
+
+function readCachedModules() {
+  try {
+    const raw = localStorage.getItem(MODULE_CACHE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed.filter((value) => typeof value === 'string' && value.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function cacheModules(modules) {
+  try {
+    localStorage.setItem(MODULE_CACHE_KEY, JSON.stringify(modules));
+  } catch {
+    // Local cache is only a fallback; central storage remains the source of truth.
+  }
+}
+
+async function fetchCentralModules() {
+  const response = await fetch('/api/modules', { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Central module service returned ${response.status}`);
+  const data = await response.json();
+  const modules = Array.isArray(data?.modules) ? data.modules.filter((value) => typeof value === 'string' && value.trim()) : [];
+  return { modules, source: data?.source || 'central' };
+}
+
+async function publishCentralModules(modules, token) {
+  const response = await fetch('/api/modules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'x-admin-token': token },
+    body: JSON.stringify({ modules }),
+  });
+  let data = null;
+  try { data = await response.json(); } catch { /* ignore malformed error bodies */ }
+  if (!response.ok) {
+    throw new Error(data?.error || `Module publish failed (${response.status})`);
+  }
+  return data;
+}
+
 export default function App() {
   const [page, setPage] = useState('home');
   const [title, setTitle] = useState('');
   const [from, setFrom] = useState('home');
-  const [excelSession, setExcelSession] = useState({ folderName: '', workbooks: [], modules: [] });
+  const [excelSession, setExcelSession] = useState(() => ({ folderName: '', workbooks: [], modules: readCachedModules() }));
   const go = (nextPage) => { setPage(nextPage); window.scrollTo(0, 0); };
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
@@ -256,8 +299,30 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(null);
   const [statusView, setStatusView] = useState(null);
+  const [centralStatus, setCentralStatus] = useState('loading');
   const { folderName, workbooks, modules } = excelSession;
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchCentralModules();
+        if (cancelled) return;
+        if (result.modules.length) {
+          cacheModules(result.modules);
+          setExcelSession((current) => ({ ...current, modules: result.modules }));
+          setCentralStatus('connected');
+        } else {
+          setCentralStatus('empty');
+        }
+      } catch (error) {
+        console.warn('Central module list unavailable; using cached modules.', error);
+        if (!cancelled) setCentralStatus('offline');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
   const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? countForModule(findReportWorkbook(workbooks, item), selected) : 0])), [COUNT_ITEMS, workbooks, selected]);
@@ -285,8 +350,33 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       const firstPath = files[0].webkitRelativePath || files[0].name;
       const connectedFolderName = firstPath.includes('/') ? firstPath.split('/')[0] : 'Selected Excel files';
       setExcelSession({ folderName: connectedFolderName, workbooks: parsed, modules: dynamicModules });
+      cacheModules(dynamicModules);
       setSelected((current) => dynamicModules.some((item) => normalize(item) === normalize(current)) ? current : null);
-      if (!dynamicModules.length) window.alert('Excel files connected, but no Module/Module Name column was found.');
+      if (!dynamicModules.length) {
+        window.alert('Excel files connected, but no Module/Module Name column was found.');
+        return;
+      }
+
+      let adminToken = '';
+      try { adminToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || ''; } catch { /* ignore */ }
+      if (!adminToken) {
+        adminToken = window.prompt('ADMIN SYNC TOKEN\nEnter the admin token to publish this module list for all website users.\nCancel keeps the list local only.') || '';
+        if (adminToken) {
+          try { sessionStorage.setItem(ADMIN_TOKEN_KEY, adminToken); } catch { /* ignore */ }
+        }
+      }
+      if (adminToken) {
+        try {
+          await publishCentralModules(dynamicModules, adminToken);
+          setCentralStatus('connected');
+          window.alert('Master module list published successfully. All users will see this module list.');
+        } catch (error) {
+          console.error(error);
+          try { sessionStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* ignore */ }
+          setCentralStatus('offline');
+          window.alert(`Module list was loaded locally, but central publish failed.\n${error.message}`);
+        }
+      }
     } catch (error) {
       console.error(error);
       window.alert('Excel folder could not be read. Please check the workbook format.');
@@ -324,7 +414,11 @@ function Reports({ back, open, excelSession, setExcelSession }) {
     open(item);
   };
 
-  return <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="folder-connect"><button onClick={connectFolder}>Connect Excel Folder</button><span>{folderName ? `Connected: ${folderName}` : 'No folder connected'}</span><input ref={inputRef} className="hidden-folder-input" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple webkitdirectory="" directory="" onChange={loadFolder}/></div><label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label><section>{list.map((moduleName) => <button className={moduleName === selected ? 'sel' : ''} key={moduleName} onClick={() => setSelected((current) => current === moduleName ? null : moduleName)}>{moduleName}</button>)}</section></aside><article className="reports">{selected ? <><header><div><p>SELECTED MODULE</p><h2>{selected}</h2></div><div className="selected-module-actions"><button className="header-download-button" onClick={downloadModuleExcel}>Download {selected} Excel</button><button onClick={() => setSelected(null)}>Close</button></div></header><section className="selected-module-columns">{GROUPS.map(([groupName, items], groupIndex) => <div className="selected-module-column" key={groupName}><h3>{groupName}</h3><div>{items.map((item, itemIndex) => { const isReport = REPORTS.includes(item); const isSizeStatus = item === 'Size Status'; const count = isSizeStatus ? null : (busy ? '…' : counts[item] ?? 0); return <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => isReport ? downloadReport(item) : openIntegrated(item)}><span>{item}</span>{count !== null ? <b>{count}</b> : null}</button>; })}</div></div>)}</section></> : <div className="empty"><b>RGT</b><p>MODULE SELECTION</p><h2>{busy ? 'Reading Excel files…' : modules.length ? 'Select a module' : 'Connect the master Excel folder'}</h2><span>{modules.length ? 'Select a module on the left to open reports here.' : 'The module list will be created automatically from the Module column.'}</span></div>}</article></div><Integrated open={openIntegrated}/></Layout>;
+  const moduleSourceText = modules.length
+    ? (centralStatus === 'connected' ? 'Connected: MASTER MODULE LIST' : folderName ? `Connected: ${folderName}` : 'Module list loaded')
+    : 'No master module list connected';
+
+  return <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="folder-connect"><button onClick={connectFolder}>Connect Excel Folder</button><span>{moduleSourceText}</span><input ref={inputRef} className="hidden-folder-input" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple webkitdirectory="" directory="" onChange={loadFolder}/></div><label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label><section>{list.map((moduleName) => <button className={moduleName === selected ? 'sel' : ''} key={moduleName} onClick={() => setSelected((current) => current === moduleName ? null : moduleName)}>{moduleName}</button>)}</section></aside><article className="reports">{selected ? <><header><div><p>SELECTED MODULE</p><h2>{selected}</h2></div><div className="selected-module-actions"><button className="header-download-button" onClick={downloadModuleExcel}>Download {selected} Excel</button><button onClick={() => setSelected(null)}>Close</button></div></header><section className="selected-module-columns">{GROUPS.map(([groupName, items], groupIndex) => <div className="selected-module-column" key={groupName}><h3>{groupName}</h3><div>{items.map((item, itemIndex) => { const isReport = REPORTS.includes(item); const isSizeStatus = item === 'Size Status'; const count = isSizeStatus ? null : (busy ? '…' : counts[item] ?? 0); return <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => isReport ? downloadReport(item) : openIntegrated(item)}><span>{item}</span>{count !== null ? <b>{count}</b> : null}</button>; })}</div></div>)}</section></> : <div className="empty"><b>RGT</b><p>MODULE SELECTION</p><h2>{busy ? 'Reading Excel files…' : modules.length ? 'Select a module' : 'Connect the master Excel folder'}</h2><span>{modules.length ? 'Select a module on the left to open reports here.' : 'The module list will be created automatically from the Module column.'}</span></div>}</article></div><Integrated open={openIntegrated}/></Layout>;
 }
 
 function SizeStatusPage({ moduleName, status, back }) {
