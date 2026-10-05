@@ -1,18 +1,21 @@
-# Report Generate Tool — Supabase Central Module Fix
+# Report Generate Tool — Supabase Central Module List
 
-Central module list behavior:
-- Admin syncs the Master Excel module names once.
-- Names are stored centrally in Supabase.
-- All users read the same active module list.
-- Browser close/reopen keeps the centrally published list.
-- Open pages refresh the module list every 30 seconds.
-- Public reads use the Vercel API first and direct Supabase REST as a fallback.
+## Vercel Environment Variables
+Set these for **Preview and Production**:
 
-Required Vercel environment variables:
-- VITE_SUPABASE_URL
-- VITE_SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_ANON_KEY)
-- SUPABASE_URL
-- SUPABASE_SERVICE_ROLE_KEY
-- ADMIN_SYNC_TOKEN
+- `SUPABASE_URL` = Supabase Project URL
+- `SUPABASE_SECRET_KEY` = Supabase Secret key (`sb_secret_...`) — server only
+- `ADMIN_SYNC_TOKEN` = your private admin sync token
 
-Run `supabase.sql` once in Supabase SQL Editor.
+The public browser read path may also use:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+
+## Supabase setup
+Run `supabase.sql` once in Supabase SQL Editor. It creates `public.modules` and the read policy.
+
+## Important
+Do not put `SUPABASE_SECRET_KEY` in source code or any `NEXT_PUBLIC_` variable.
+
+## Central sync flow
+Master Excel -> `/api/modules` POST -> Supabase `public.modules` -> all users read the same module list.
