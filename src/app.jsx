@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 
 const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management'];
-const REPORTS = ['MTO Report', 'Valve Report', 'Pipe Branch Report', 'Primary Support Report', 'ATTA Report', 'Elbow and Bend Report', 'Equipment Orientation and Position Report', 'Special Item Report', 'Nozzle Report'];
+const REPORTS = ['MTO Report', 'Valve Report', 'Pipe Branch Report', 'Primary Support Report', 'ATTA Report', 'Elbow and Bend Report', 'Equipment Orientation and Position Report', 'Special Item Report', 'Pipe Support Report', 'Nozzle Report', 'Pipe Rack Report'];
 const GROUPS = [
   ['E3D Reports', REPORTS],
   ['Modelling Status', ['Size Status', 'Fluid Code', 'Material and Specification']],
   ['Gate Status', ['Line Status', 'Equipment Status', 'Escape Route Status', 'Safety Equipment Status', 'Material Handling Status', 'Support Status']],
-  ['ISO Utility', ['Data Consistency', 'Gusset Report', 'ISO Break Check', 'Specification Mismatch', 'Pipe Aid Check', 'Pipe Insulation Check', 'Vendor Document Check', 'Weld Gap Check', 'Support Tag Check', 'Clash Report']],
+  ['ISO Utility', ['Data Consistency', 'Gusset Report', 'ISO Break Check', 'Specification Mismatch', 'Pipe Aid Check', 'Pipe Insulation Check', 'Vendor Document Check', 'Weld Gap Check', 'Support Document Check']],
 ];
 
 const normalize = (value) => String(value ?? '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
@@ -174,6 +174,7 @@ function createModuleWorkbook(workbooks, moduleName) {
       const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
       const outputRows = [...headerRows, ...matchingRows];
       const outputSheet = XLSX.utils.aoa_to_sheet(outputRows, { cellDates: true });
+      copyHeaderFormatting(sheetEntry.sheet, outputSheet, sheetEntry.header.rowIndex);
       if (sheetEntry.sheet['!cols']) outputSheet['!cols'] = sheetEntry.sheet['!cols'];
       if (sheetEntry.sheet['!merges']) {
         outputSheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= sheetEntry.header.rowIndex);
@@ -199,6 +200,7 @@ function createFilteredWorkbook(workbookEntry, moduleName, reportName) {
     const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
     const outputRows = [...headerRows, ...matchingRows];
     const outputSheet = XLSX.utils.aoa_to_sheet(outputRows, { cellDates: true });
+    copyHeaderFormatting(sheetEntry.sheet, outputSheet, sheetEntry.header.rowIndex);
     if (sheetEntry.sheet['!cols']) outputSheet['!cols'] = sheetEntry.sheet['!cols'];
     if (sheetEntry.sheet['!merges']) outputSheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= sheetEntry.header.rowIndex);
     XLSX.utils.book_append_sheet(output, outputSheet, sheetEntry.sheetName.slice(0, 31));
@@ -383,13 +385,13 @@ export default function App() {
   const go = (nextPage) => { setPage(nextPage); window.scrollTo(0, 0); };
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
-  if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data or report has been added to this page yet.</span><button onClick={() => go(from)}>Return to Previous Page</button></div></Layout>;
+  if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data is currently mapped to this view.</span></div></Layout>;
   return <Home reports={() => go('reports')} blank={(nextTitle) => blank(nextTitle, 'home')} />;
 }
 
 function Home({ reports, blank }) {
   const action = (code, name, actionName) => code === '4193' && actionName === 'Reports and Status' ? reports() : blank(`${code} · ${name} · ${actionName}`);
-  return <><section className="hero"><div/><main><p>FPSO PROJECT PORTAL</p><h1>Reports Generate Tools</h1></main></section><section className="dashboard"><div className="projects"><Card code="4193" name="HAMMER HEAD" click={(item) => action('4193', 'HAMMER HEAD', item)}/><Card code="4173" name="Gato do Mato" click={(item) => action('4173', 'Gato do Mato', item)}/></div></section></>;
+  return <><section className="hero"><div/><main><p>FPSO PROJECT PORTAL</p><h1>Reports Generate Tools</h1></main></section><section className="dashboard"><div className="projects"><Card code="4193" name="Hammer Head" click={(actionName) => action('4193', 'Hammer Head', actionName)} /></div></section></>;
 }
 
 function Card({ code, name, click }) {
@@ -436,7 +438,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [workbooks, selected]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -534,7 +536,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
     ? (centralStatus === 'connected' ? 'Connected: MASTER MODULE LIST' : folderName ? `Connected: ${folderName}` : 'Module list loaded')
     : 'No master module list connected';
 
-  return <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="folder-connect"><button onClick={connectFolder}>Connect Excel Folder</button><span>{moduleSourceText}</span><input ref={inputRef} className="hidden-folder-input" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple webkitdirectory="" directory="" onChange={loadFolder}/></div><label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label><section>{list.map((moduleName) => <button className={moduleName === selected ? 'sel' : ''} key={moduleName} onClick={() => setSelected((current) => current === moduleName ? null : moduleName)}>{moduleName}</button>)}</section></aside><article className="reports">{selected ? <><header><div><p>SELECTED MODULE</p><h2>{selected}</h2></div><div className="selected-module-actions"><button className="header-download-button" onClick={downloadModuleExcel}>Download {selected} Excel</button><button onClick={() => setSelected(null)}>Close</button></div></header><section className="selected-module-columns">{GROUPS.map(([groupName, items], groupIndex) => <div className="selected-module-column" key={groupName}><h3>{groupName}</h3><div>{items.map((item, itemIndex) => { const isReport = REPORTS.includes(item); const isSizeStatus = item === 'Size Status'; const count = isSizeStatus ? null : (busy ? '…' : counts[item] ?? 0); return <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => isReport ? downloadReport(item) : openIntegrated(item)}><span>{item}</span>{count !== null ? <b>{count}</b> : null}</button>; })}</div></div>)}</section></> : <div className="empty"><b>RGT</b><p>MODULE SELECTION</p><h2>{busy ? 'Reading Excel files…' : modules.length ? 'Select a module' : 'Connect the master Excel folder'}</h2><span>{modules.length ? 'Select a module on the left to open reports here.' : 'The module list will be created automatically from the Module column.'}</span></div>}</article></div><Integrated open={openIntegrated}/></Layout>;
+  return <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="module-tools"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search modules" /><button onClick={connectFolder}>Connect Folder</button><input ref={inputRef} type="file" webkitdirectory="" directory="" multiple hidden onChange={loadFolder} /></div><div className="module-source"><span>{moduleSourceText}</span></div><ul className="module-list">{list.map((moduleName) => <li key={moduleName} className={selected === moduleName ? 'active' : ''}><button onClick={() => setSelected(moduleName)}>{moduleName}</button></li>)}</ul>{selected && <button className="primary" onClick={downloadModuleExcel} disabled={busy}>Download Module Excel</button>}</aside><main className="panel"><section className="overview"><header><p>REPORT OVERVIEW</p><h2>{selected || 'No module selected'}</h2></header><div className="cards">{GROUPS.map(([groupName, items]) => <article key={groupName}><h3>{groupName}</h3><div className="report-grid">{items.map((item) => <button key={item} onClick={() => openIntegrated(item)}>{item}{selected && <span>{counts[item] ?? 0}</span>}</button>)}</div></article>)}</div></section></main></div></Layout>;
 }
 
 function SizeStatusPage({ moduleName, status, back }) {
@@ -562,7 +564,7 @@ function SizeStatusPage({ moduleName, status, back }) {
 }
 
 function Integrated({ open }) {
-  return <section className="integrated"><header><p>INTEGRATED TOOL</p><h2>Overall Project and Module-Wise Status</h2></header><div>{GROUPS.map(([groupName, items], groupIndex) => <article key={groupName}><h3>{groupName}</h3><section>{items.map((item, itemIndex) => <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => open(item)}>{item}</button>)}</section></article>)}</div></section>;
+  return <section className="integrated"><header><p>INTEGRATED TOOL</p><h2>Overall Project and Module-Wise Status</h2></header><div>{GROUPS.map(([groupName, items], groupIndex) => <article key={groupName}><h3>{groupName}</h3><div className="report-grid">{items.map((item) => <button key={item} onClick={() => open(item)}>{item}</button>)}</div></article>)}</div></section>;
 }
 
 function Layout({ title, sub, back, children }) {
