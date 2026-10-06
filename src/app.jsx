@@ -113,7 +113,11 @@ function isNamedReportWorkbook(entry, expectedName) {
   return normalize(nameWithoutTrailingNumbers) === normalize(expectedName);
 }
 function mtoWorkbookCandidates(workbooks) {
-  const mtoOnlyWorkbooks = workbooks.filter((entry) => !isNamedReportWorkbook(entry, 'EHH_VALVE_REPORT') && !isNamedReportWorkbook(entry, 'EHH_BRAN_REPORT'));
+  const mtoOnlyWorkbooks = workbooks.filter((entry) =>
+    !isNamedReportWorkbook(entry, 'EHH_VALVE_REPORT') &&
+    !isNamedReportWorkbook(entry, 'EHH_BRAN_REPORT') &&
+    !isNamedReportWorkbook(entry, 'EHH_ATTA_REPORT')
+  );
   const matched = findReportWorkbook(mtoOnlyWorkbooks, 'MTO Report');
   return matched ? [matched] : mtoOnlyWorkbooks.filter((entry) => entry.sheets.some((sheet) => (sheet.header?.remarksColumns?.length ?? 0) > 0));
 }
@@ -134,7 +138,7 @@ function isRedHeaderCell(cell) {
   const blue = parseInt(rgb.slice(4, 6), 16);
   return red >= 140 && red >= green * 1.25 && red >= blue * 1.25;
 }
-function valveRedColumns(sheetEntry) {
+function reportRemarksColumns(sheetEntry) {
   if (!sheetEntry.header) return [];
   const headerRow = sheetEntry.rows[sheetEntry.header.rowIndex] ?? [];
   const columns = new Set(sheetEntry.header.remarksColumns ?? []);
@@ -147,7 +151,7 @@ function valveRedColumns(sheetEntry) {
   return [...columns];
 }
 function valveRowHasRemarks(sheetEntry, row) {
-  return valveRedColumns(sheetEntry).some((columnIndex) => hasMeaningfulRemark(row?.[columnIndex]));
+  return reportRemarksColumns(sheetEntry).some((columnIndex) => hasMeaningfulRemark(row?.[columnIndex]));
 }
 function findValveReportWorkbook(workbooks) {
   return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_VALVE_REPORT')) ?? null;
@@ -155,15 +159,23 @@ function findValveReportWorkbook(workbooks) {
 function findPipeBranchReportWorkbook(workbooks) {
   return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_BRAN_REPORT')) ?? null;
 }
+function findAttaReportWorkbook(workbooks) {
+  return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_ATTA_REPORT')) ?? null;
+}
 function countValveRemarks(workbooks, moduleName) {
   const workbookEntry = findValveReportWorkbook(workbooks);
   if (!workbookEntry) return 0;
-  return workbookEntry.sheets.reduce((total, sheetEntry) => total + (valveRedColumns(sheetEntry).length ? rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row)).length : 0), 0);
+  return workbookEntry.sheets.reduce((total, sheetEntry) => total + (reportRemarksColumns(sheetEntry).length ? rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row)).length : 0), 0);
+}
+function countReportRemarks(workbookEntry, moduleName) {
+  if (!workbookEntry) return 0;
+  return workbookEntry.sheets.reduce((total, sheetEntry) => total + (reportRemarksColumns(sheetEntry).length ? rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row)).length : 0), 0);
 }
 function countPipeBranchRemarks(workbooks, moduleName) {
-  const workbookEntry = findPipeBranchReportWorkbook(workbooks);
-  if (!workbookEntry) return 0;
-  return workbookEntry.sheets.reduce((total, sheetEntry) => total + (valveRedColumns(sheetEntry).length ? rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row)).length : 0), 0);
+  return countReportRemarks(findPipeBranchReportWorkbook(workbooks), moduleName);
+}
+function countAttaRemarks(workbooks, moduleName) {
+  return countReportRemarks(findAttaReportWorkbook(workbooks), moduleName);
 }
 function copyExactHeaderFill(sourceSheet, outputSheet, headerRowIndex) {
   const range = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
@@ -269,7 +281,7 @@ function createValveRemarksWorkbook(workbooks, moduleName) {
   const usedNames = new Set();
   let exportedRows = 0;
   for (const sheetEntry of workbookEntry.sheets) {
-    if (!valveRedColumns(sheetEntry).length) continue;
+    if (!reportRemarksColumns(sheetEntry).length) continue;
     const matchingRows = rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row));
     if (!matchingRows.length) continue;
     const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
@@ -285,14 +297,13 @@ function createValveRemarksWorkbook(workbooks, moduleName) {
   return true;
 }
 
-function createPipeBranchRemarksWorkbook(workbooks, moduleName) {
-  const workbookEntry = findPipeBranchReportWorkbook(workbooks);
+function createNamedRemarksWorkbook(workbookEntry, moduleName, reportName) {
   if (!workbookEntry) return false;
   const output = XLSX.utils.book_new();
   const usedNames = new Set();
   let exportedRows = 0;
   for (const sheetEntry of workbookEntry.sheets) {
-    if (!valveRedColumns(sheetEntry).length) continue;
+    if (!reportRemarksColumns(sheetEntry).length) continue;
     const matchingRows = rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row));
     if (!matchingRows.length) continue;
     const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
@@ -304,7 +315,7 @@ function createPipeBranchRemarksWorkbook(workbooks, moduleName) {
     exportedRows += matchingRows.length;
   }
   if (!exportedRows) return false;
-  XLSX.writeFile(output, `${moduleName} Pipe Branch Report Remarks.xlsx`, { compression: true, cellStyles: true });
+  XLSX.writeFile(output, `${moduleName} ${reportName} Remarks.xlsx`, { compression: true, cellStyles: true });
   return true;
 }
 
@@ -517,7 +528,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -605,11 +616,15 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       return;
     }
     if (reportName === 'Pipe Branch Report') {
-      if (!findPipeBranchReportWorkbook(workbooks)) {
-        window.alert('No EHH_BRAN_REPORT Excel file was found in the connected folder.');
-        return;
-      }
-      if (!createPipeBranchRemarksWorkbook(workbooks, selected)) window.alert(`No ${selected} row with remarks was found under red header columns in Pipe Branch Report.`);
+      const workbookEntry = findPipeBranchReportWorkbook(workbooks);
+      if (!workbookEntry) { window.alert('No EHH_BRAN_REPORT Excel file was found in the connected folder.'); return; }
+      if (!createNamedRemarksWorkbook(workbookEntry, selected, 'Pipe Branch Report')) window.alert(`No ${selected} row with remarks was found for Pipe Branch Report.`);
+      return;
+    }
+    if (reportName === 'ATTA Report') {
+      const workbookEntry = findAttaReportWorkbook(workbooks);
+      if (!workbookEntry) { window.alert('No EHH_ATTA_REPORT Excel file was found in the connected folder.'); return; }
+      if (!createNamedRemarksWorkbook(workbookEntry, selected, 'ATTA Report')) window.alert(`No ${selected} row with remarks was found for ATTA Report.`);
       return;
     }
     const workbookEntry = findReportWorkbook(workbooks, reportName);
