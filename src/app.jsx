@@ -116,7 +116,8 @@ function mtoWorkbookCandidates(workbooks) {
   const mtoOnlyWorkbooks = workbooks.filter((entry) =>
     !isNamedReportWorkbook(entry, 'EHH_VALVE_REPORT') &&
     !isNamedReportWorkbook(entry, 'EHH_BRAN_REPORT') &&
-    !isNamedReportWorkbook(entry, 'EHH_ATTA_REPORT')
+    !isNamedReportWorkbook(entry, 'EHH_ATTA_REPORT') &&
+    !isNamedReportWorkbook(entry, 'EHH_SUPPORT_REPORT')
   );
   const matched = findReportWorkbook(mtoOnlyWorkbooks, 'MTO Report');
   return matched ? [matched] : mtoOnlyWorkbooks.filter((entry) => entry.sheets.some((sheet) => (sheet.header?.remarksColumns?.length ?? 0) > 0));
@@ -162,6 +163,9 @@ function findPipeBranchReportWorkbook(workbooks) {
 function findAttaReportWorkbook(workbooks) {
   return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_ATTA_REPORT')) ?? null;
 }
+function findPrimarySupportReportWorkbook(workbooks) {
+  return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_SUPPORT_REPORT')) ?? null;
+}
 function countValveRemarks(workbooks, moduleName) {
   const workbookEntry = findValveReportWorkbook(workbooks);
   if (!workbookEntry) return 0;
@@ -176,6 +180,9 @@ function countPipeBranchRemarks(workbooks, moduleName) {
 }
 function countAttaRemarks(workbooks, moduleName) {
   return countReportRemarks(findAttaReportWorkbook(workbooks), moduleName);
+}
+function countPrimarySupportRemarks(workbooks, moduleName) {
+  return countReportRemarks(findPrimarySupportReportWorkbook(workbooks), moduleName);
 }
 function copyExactHeaderFill(sourceSheet, outputSheet, headerRowIndex) {
   const range = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
@@ -528,7 +535,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -625,6 +632,12 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       const workbookEntry = findAttaReportWorkbook(workbooks);
       if (!workbookEntry) { window.alert('No EHH_ATTA_REPORT Excel file was found in the connected folder.'); return; }
       if (!createNamedRemarksWorkbook(workbookEntry, selected, 'ATTA Report')) window.alert(`No ${selected} row with remarks was found for ATTA Report.`);
+      return;
+    }
+    if (reportName === 'Primary Support Report') {
+      const workbookEntry = findPrimarySupportReportWorkbook(workbooks);
+      if (!workbookEntry) { window.alert('No EHH_SUPPORT_REPORT Excel file was found in the connected folder.'); return; }
+      if (!createNamedRemarksWorkbook(workbookEntry, selected, 'Primary Support Report')) window.alert(`No ${selected} row with remarks was found for Primary Support Report.`);
       return;
     }
     const workbookEntry = findReportWorkbook(workbooks, reportName);
