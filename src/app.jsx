@@ -107,12 +107,63 @@ function countForModule(workbookEntry, moduleName) {
 function rowHasRemarks(sheetEntry, row) {
   return (sheetEntry.header?.remarksColumns ?? []).some((columnIndex) => hasMeaningfulRemark(row?.[columnIndex]));
 }
+function isNamedReportWorkbook(entry, expectedName) {
+  const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
+  const nameWithoutTrailingNumbers = fileNameWithoutExtension.replace(/[_\s-]*\d+$/, '');
+  return normalize(nameWithoutTrailingNumbers) === normalize(expectedName);
+}
 function mtoWorkbookCandidates(workbooks) {
-  const matched = findReportWorkbook(workbooks, 'MTO Report');
-  return matched ? [matched] : workbooks.filter((entry) => entry.sheets.some((sheet) => (sheet.header?.remarksColumns?.length ?? 0) > 0));
+  const mtoOnlyWorkbooks = workbooks.filter((entry) => !isNamedReportWorkbook(entry, 'EHH_VALVE_REPORT') && !isNamedReportWorkbook(entry, 'EHH_BRAN_REPORT'));
+  const matched = findReportWorkbook(mtoOnlyWorkbooks, 'MTO Report');
+  return matched ? [matched] : mtoOnlyWorkbooks.filter((entry) => entry.sheets.some((sheet) => (sheet.header?.remarksColumns?.length ?? 0) > 0));
 }
 function countMtoRemarks(workbooks, moduleName) {
   return mtoWorkbookCandidates(workbooks).reduce((total, entry) => total + entry.sheets.reduce((sheetTotal, sheet) => sheetTotal + (sheet.header?.remarksColumns?.length ? rowsForModule(sheet, moduleName).filter((row) => rowHasRemarks(sheet, row)).length : 0), 0), 0);
+}
+function headerFillRgb(cell) {
+  const fill = cell?.s?.fill ?? cell?.s;
+  const color = fill?.fgColor ?? fill?.bgColor;
+  const rgb = String(color?.rgb ?? '').replace(/^FF/i, '').toUpperCase();
+  return /^[0-9A-F]{6}$/.test(rgb) ? rgb : '';
+}
+function isRedHeaderCell(cell) {
+  const rgb = headerFillRgb(cell);
+  if (!rgb) return false;
+  const red = parseInt(rgb.slice(0, 2), 16);
+  const green = parseInt(rgb.slice(2, 4), 16);
+  const blue = parseInt(rgb.slice(4, 6), 16);
+  return red >= 140 && red >= green * 1.25 && red >= blue * 1.25;
+}
+function valveRedColumns(sheetEntry) {
+  if (!sheetEntry.header) return [];
+  const headerRow = sheetEntry.rows[sheetEntry.header.rowIndex] ?? [];
+  const columns = new Set(sheetEntry.header.remarksColumns ?? []);
+  const range = sheetEntry.sheet['!ref'] ? XLSX.utils.decode_range(sheetEntry.sheet['!ref']) : null;
+  if (!range) return [...columns];
+  for (let columnIndex = range.s.c; columnIndex <= range.e.c; columnIndex += 1) {
+    const address = XLSX.utils.encode_cell({ r: sheetEntry.header.rowIndex, c: columnIndex });
+    if (isRemarksHeader(headerRow[columnIndex]) || isRedHeaderCell(sheetEntry.sheet[address])) columns.add(columnIndex);
+  }
+  return [...columns];
+}
+function valveRowHasRemarks(sheetEntry, row) {
+  return valveRedColumns(sheetEntry).some((columnIndex) => hasMeaningfulRemark(row?.[columnIndex]));
+}
+function findValveReportWorkbook(workbooks) {
+  return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_VALVE_REPORT')) ?? null;
+}
+function findPipeBranchReportWorkbook(workbooks) {
+  return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_BRAN_REPORT')) ?? null;
+}
+function countValveRemarks(workbooks, moduleName) {
+  const workbookEntry = findValveReportWorkbook(workbooks);
+  if (!workbookEntry) return 0;
+  return workbookEntry.sheets.reduce((total, sheetEntry) => total + (valveRedColumns(sheetEntry).length ? rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row)).length : 0), 0);
+}
+function countPipeBranchRemarks(workbooks, moduleName) {
+  const workbookEntry = findPipeBranchReportWorkbook(workbooks);
+  if (!workbookEntry) return 0;
+  return workbookEntry.sheets.reduce((total, sheetEntry) => total + (valveRedColumns(sheetEntry).length ? rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row)).length : 0), 0);
 }
 function copyExactHeaderFill(sourceSheet, outputSheet, headerRowIndex) {
   const range = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
@@ -211,6 +262,52 @@ function createMtoRemarksWorkbook(workbooks, moduleName) {
   return true;
 }
 
+function createValveRemarksWorkbook(workbooks, moduleName) {
+  const workbookEntry = findValveReportWorkbook(workbooks);
+  if (!workbookEntry) return false;
+  const output = XLSX.utils.book_new();
+  const usedNames = new Set();
+  let exportedRows = 0;
+  for (const sheetEntry of workbookEntry.sheets) {
+    if (!valveRedColumns(sheetEntry).length) continue;
+    const matchingRows = rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row));
+    if (!matchingRows.length) continue;
+    const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
+    const outputSheet = XLSX.utils.aoa_to_sheet([...headerRows, ...matchingRows], { cellDates: true });
+    copyExactHeaderFill(sheetEntry.sheet, outputSheet, sheetEntry.header.rowIndex);
+    if (sheetEntry.sheet['!cols']) outputSheet['!cols'] = sheetEntry.sheet['!cols'];
+    if (sheetEntry.sheet['!merges']) outputSheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= sheetEntry.header.rowIndex);
+    XLSX.utils.book_append_sheet(output, outputSheet, safeSheetName(sheetEntry.sheetName, usedNames));
+    exportedRows += matchingRows.length;
+  }
+  if (!exportedRows) return false;
+  XLSX.writeFile(output, `${moduleName} Valve Report Remarks.xlsx`, { compression: true, cellStyles: true });
+  return true;
+}
+
+function createPipeBranchRemarksWorkbook(workbooks, moduleName) {
+  const workbookEntry = findPipeBranchReportWorkbook(workbooks);
+  if (!workbookEntry) return false;
+  const output = XLSX.utils.book_new();
+  const usedNames = new Set();
+  let exportedRows = 0;
+  for (const sheetEntry of workbookEntry.sheets) {
+    if (!valveRedColumns(sheetEntry).length) continue;
+    const matchingRows = rowsForModule(sheetEntry, moduleName).filter((row) => valveRowHasRemarks(sheetEntry, row));
+    if (!matchingRows.length) continue;
+    const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
+    const outputSheet = XLSX.utils.aoa_to_sheet([...headerRows, ...matchingRows], { cellDates: true });
+    copyExactHeaderFill(sheetEntry.sheet, outputSheet, sheetEntry.header.rowIndex);
+    if (sheetEntry.sheet['!cols']) outputSheet['!cols'] = sheetEntry.sheet['!cols'];
+    if (sheetEntry.sheet['!merges']) outputSheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= sheetEntry.header.rowIndex);
+    XLSX.utils.book_append_sheet(output, outputSheet, safeSheetName(sheetEntry.sheetName, usedNames));
+    exportedRows += matchingRows.length;
+  }
+  if (!exportedRows) return false;
+  XLSX.writeFile(output, `${moduleName} Pipe Branch Report Remarks.xlsx`, { compression: true, cellStyles: true });
+  return true;
+}
+
 const SIZE_BUCKETS = ['<2"', '2"-4"', '6"-8"', '10"-14"', '16"-20"'];
 const SIZE_HEADER_ALIASES = ['line size', 'nps', 'nps size', 'nominal size', 'nominal diameter', 'pipe size', 'size', 'diameter', 'dia'];
 const MODEL_STATUS_HEADER_ALIASES = ['model status', 'modelled status', 'modeled status', 'modelling status', 'modeling status', 'modelled', 'modeled'];
@@ -277,7 +374,7 @@ function createSizeStatusWorkbook(moduleName, status) {
     ['1PA-Status', ...SIZE_BUCKETS, 'Grand Total'],
     ['MODELLED', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket]), Object.values(status['MODELLED']).reduce((sum, value) => sum + value, 0)],
     ['NOT MODELLED', ...SIZE_BUCKETS.map((bucket) => status['NOT MODELLED'][bucket]), Object.values(status['NOT MODELLED']).reduce((sum, value) => sum + value, 0)],
-    ['PLANNED', ...SIZE_BUCKETS.map(() => 0), 0],
+    ['PLAND', ...SIZE_BUCKETS.map(() => 0), 0],
     ['GRAND TOTAL', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket] + status['NOT MODELLED'][bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket] + status['NOT MODELLED'][bucket], 0)],
   ];
   const output = XLSX.utils.book_new();
@@ -350,6 +447,9 @@ async function publishCentralModules(modules, token) {
   });
   let data = null;
   try { data = await response.json(); } catch { /* ignore malformed error bodies */ }
+  if (response.status === 404) {
+    return { ok: false, skipped: true, reason: 'module-api-unavailable' };
+  }
   if (!response.ok) {
     throw new Error(data?.error || `Module publish failed (${response.status})`);
   }
@@ -417,7 +517,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -460,9 +560,13 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       }
       if (adminToken) {
         try {
-          await publishCentralModules(dynamicModules, adminToken);
-          setCentralStatus('connected');
-          window.alert('Master module list published successfully. All users will see this module list.');
+          const publishResult = await publishCentralModules(dynamicModules, adminToken);
+          if (publishResult?.skipped) {
+            setCentralStatus('offline');
+          } else {
+            setCentralStatus('connected');
+            window.alert('Master module list published successfully. All users will see this module list.');
+          }
         } catch (error) {
           console.error(error);
           try { sessionStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* ignore */ }
@@ -490,6 +594,22 @@ function Reports({ back, open, excelSession, setExcelSession }) {
     if (!selected) return;
     if (reportName === 'MTO Report') {
       if (!createMtoRemarksWorkbook(workbooks, selected)) window.alert(`No ${selected} row with remarks was found for MTO Report.`);
+      return;
+    }
+    if (reportName === 'Valve Report') {
+      if (!findValveReportWorkbook(workbooks)) {
+        window.alert('No EHH_VALVE_REPORT Excel file was found in the connected folder.');
+        return;
+      }
+      if (!createValveRemarksWorkbook(workbooks, selected)) window.alert(`No ${selected} row with remarks was found under red header columns in Valve Report.`);
+      return;
+    }
+    if (reportName === 'Pipe Branch Report') {
+      if (!findPipeBranchReportWorkbook(workbooks)) {
+        window.alert('No EHH_BRAN_REPORT Excel file was found in the connected folder.');
+        return;
+      }
+      if (!createPipeBranchRemarksWorkbook(workbooks, selected)) window.alert(`No ${selected} row with remarks was found under red header columns in Pipe Branch Report.`);
       return;
     }
     const workbookEntry = findReportWorkbook(workbooks, reportName);
@@ -534,7 +654,7 @@ function SizeStatusPage({ moduleName, status, back }) {
           <tbody>
             <tr><th>MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket]}</td>)}<td>{modelledTotal}</td></tr>
             <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['NOT MODELLED'][bucket]}</td>)}<td>{notModelledTotal}</td></tr>
-            <tr><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>0</td>)}<td>0</td></tr>
+            <tr><th>PLAND</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>0</td>)}<td>0</td></tr>
             <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket]}</td>)}<td>{grandTotal}</td></tr>
           </tbody>
         </table>
