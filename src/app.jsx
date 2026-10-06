@@ -21,11 +21,9 @@ const isOverallHeader = (value) => {
 };
 const isRemarksHeader = (value) => normalize(value).startsWith('remarks');
 const hasMeaningfulRemark = (value) => {
-  if (value === null || value === undefined) return false;
-  const text = String(value).trim();
+  const text = String(value ?? '').trim();
   if (!text) return false;
-  const n = normalize(text);
-  return !['unset', 'null', 'nil', 'na', 'none', 'noremark', 'noremarks'].includes(n);
+  return !['unset', 'null', 'nil', 'na', 'none', 'noremark', 'noremarks'].includes(normalize(text));
 };
 const toNumber = (value) => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -111,39 +109,23 @@ function rowHasRemarks(sheetEntry, row) {
 }
 function mtoWorkbookCandidates(workbooks) {
   const matched = findReportWorkbook(workbooks, 'MTO Report');
-  if (matched) return [matched];
-  return workbooks.filter((entry) => entry.sheets.some((sheet) => (sheet.header?.remarksColumns?.length ?? 0) > 0));
+  return matched ? [matched] : workbooks.filter((entry) => entry.sheets.some((sheet) => (sheet.header?.remarksColumns?.length ?? 0) > 0));
 }
 function countMtoRemarks(workbooks, moduleName) {
-  let total = 0;
-  for (const entry of mtoWorkbookCandidates(workbooks)) {
-    for (const sheet of entry.sheets) {
-      if (!sheet.header?.remarksColumns?.length) continue;
-      total += rowsForModule(sheet, moduleName).filter((row) => rowHasRemarks(sheet, row)).length;
-    }
-  }
-  return total;
+  return mtoWorkbookCandidates(workbooks).reduce((total, entry) => total + entry.sheets.reduce((sheetTotal, sheet) => sheetTotal + (sheet.header?.remarksColumns?.length ? rowsForModule(sheet, moduleName).filter((row) => rowHasRemarks(sheet, row)).length : 0), 0), 0);
 }
-function copyHeaderFormatting(sourceSheet, outputSheet, headerRowIndex) {
-  const sourceRange = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
-  if (!sourceRange) return;
-  const lastHeaderRow = Math.min(headerRowIndex, sourceRange.e.r);
-  for (let r = sourceRange.s.r; r <= lastHeaderRow; r += 1) {
-    for (let c = sourceRange.s.c; c <= sourceRange.e.c; c += 1) {
+function copyExactHeaderFill(sourceSheet, outputSheet, headerRowIndex) {
+  const range = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
+  if (!range) return;
+  for (let r = range.s.r; r <= Math.min(headerRowIndex, range.e.r); r += 1) {
+    for (let c = range.s.c; c <= range.e.c; c += 1) {
       const address = XLSX.utils.encode_cell({ r, c });
-      const sourceCell = sourceSheet[address];
-      const outputCell = outputSheet[address];
-      if (!sourceCell || !outputCell) continue;
-      if (sourceCell.s) outputCell.s = JSON.parse(JSON.stringify(sourceCell.s));
-      if (sourceCell.z) outputCell.z = sourceCell.z;
+      if (sourceSheet[address]?.s && outputSheet[address]) {
+        outputSheet[address].s = { fill: JSON.parse(JSON.stringify(sourceSheet[address].s)) };
+      }
     }
   }
-  if (sourceSheet['!rows']) {
-    outputSheet['!rows'] = outputSheet['!rows'] ?? [];
-    for (let r = 0; r <= lastHeaderRow; r += 1) {
-      if (sourceSheet['!rows'][r]) outputSheet['!rows'][r] = { ...sourceSheet['!rows'][r] };
-    }
-  }
+  if (sourceSheet['!rows']) outputSheet['!rows'] = sourceSheet['!rows'].slice(0, headerRowIndex + 1).map((row) => row ? { ...row } : row);
 }
 
 function safeSheetName(value, usedNames) {
@@ -219,7 +201,7 @@ function createMtoRemarksWorkbook(workbooks, moduleName) {
       if (!matchingRows.length) continue;
       const headerRows = sheetEntry.rows.slice(0, sheetEntry.header.rowIndex + 1);
       const outputSheet = XLSX.utils.aoa_to_sheet([...headerRows, ...matchingRows], { cellDates: true });
-      copyHeaderFormatting(sheetEntry.sheet, outputSheet, sheetEntry.header.rowIndex);
+      copyExactHeaderFill(sheetEntry.sheet, outputSheet, sheetEntry.header.rowIndex);
       if (sheetEntry.sheet['!cols']) outputSheet['!cols'] = sheetEntry.sheet['!cols'];
       if (sheetEntry.sheet['!merges']) outputSheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= sheetEntry.header.rowIndex);
       XLSX.utils.book_append_sheet(output, outputSheet, safeSheetName(sheetEntry.sheetName, usedNames));
