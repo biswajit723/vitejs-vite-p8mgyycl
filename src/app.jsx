@@ -557,7 +557,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
         }
       }
       // Preserve the module order from the Master Excel.
-      const dynamicModules = [...moduleMap.values()];
+      const dynamicModules = [...moduleMap.values()].filter((moduleName) => normalize(moduleName) !== 'grandtotal');
       const firstPath = files[0].webkitRelativePath || files[0].name;
       const connectedFolderName = firstPath.includes('/') ? firstPath.split('/')[0] : 'Selected Excel files';
       setExcelSession({ folderName: connectedFolderName, workbooks: parsed, modules: dynamicModules });
