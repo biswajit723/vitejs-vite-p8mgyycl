@@ -392,7 +392,7 @@ function createSizeStatusWorkbook(moduleName, status) {
     ['1PA-Status', ...SIZE_BUCKETS, 'Grand Total'],
     ['MODELLED', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket]), Object.values(status['MODELLED']).reduce((sum, value) => sum + value, 0)],
     ['NOT MODELLED', ...SIZE_BUCKETS.map((bucket) => status['NOT MODELLED'][bucket]), Object.values(status['NOT MODELLED']).reduce((sum, value) => sum + value, 0)],
-    ['PLAND', ...SIZE_BUCKETS.map(() => 0), 0],
+    ['PLANNED', ...SIZE_BUCKETS.map(() => 0), 0],
     ['GRAND TOTAL', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket] + status['NOT MODELLED'][bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket] + status['NOT MODELLED'][bucket], 0)],
   ];
   const output = XLSX.utils.book_new();
@@ -533,7 +533,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       window.clearInterval(intervalId);
     };
   }, [setExcelSession]);
-  const list = useMemo(() => modules.filter((moduleName) => normalize(moduleName) !== 'grandtotal' && moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
+  const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
   const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
 
@@ -557,7 +557,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
         }
       }
       // Preserve the module order from the Master Excel.
-      const dynamicModules = [...moduleMap.values()].filter((moduleName) => normalize(moduleName) !== 'grandtotal');
+      const dynamicModules = [...moduleMap.values()];
       const firstPath = files[0].webkitRelativePath || files[0].name;
       const connectedFolderName = firstPath.includes('/') ? firstPath.split('/')[0] : 'Selected Excel files';
       setExcelSession({ folderName: connectedFolderName, workbooks: parsed, modules: dynamicModules });
@@ -682,7 +682,7 @@ function SizeStatusPage({ moduleName, status, back }) {
           <tbody>
             <tr><th>MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket]}</td>)}<td>{modelledTotal}</td></tr>
             <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['NOT MODELLED'][bucket]}</td>)}<td>{notModelledTotal}</td></tr>
-            <tr><th>PLAND</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>0</td>)}<td>0</td></tr>
+            <tr><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>0</td>)}<td>0</td></tr>
             <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket]}</td>)}<td>{grandTotal}</td></tr>
           </tbody>
         </table>
