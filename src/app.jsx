@@ -360,6 +360,17 @@ function modellingState(value) {
   return null;
 }
 
+function isPipeE3dStatusWorkbook(workbookEntry) {
+  const fileNameWithoutExtension = workbookEntry.file.name.replace(/\.[^.]+$/, '');
+  return normalize(fileNameWithoutExtension).startsWith('pipee3dstatusehh');
+}
+
+function pipeModuleAndSize(value) {
+  const parts = String(value ?? '').trim().replace(/^\/+/, '').split('-').map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 3) return null;
+  return { moduleName: parts[0], bucket: sizeBucket(parts[2]) };
+}
+
 function getSizeStatus(workbooks, moduleName) {
   const result = {
     'MODELLED': Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, 0])),
@@ -370,6 +381,27 @@ function getSizeStatus(workbooks, moduleName) {
 
   for (const workbookEntry of workbooks) {
     for (const sheetEntry of workbookEntry.sheets) {
+      if (isPipeE3dStatusWorkbook(workbookEntry)) {
+        let pipeHeaderRowIndex = -1;
+        let pipeColumn = -1;
+        for (let rowIndex = 0; rowIndex < Math.min(sheetEntry.rows.length, 40); rowIndex += 1) {
+          const foundColumn = findColumnByAliases(sheetEntry.rows[rowIndex] ?? [], ['pipe']);
+          if (foundColumn >= 0) {
+            pipeHeaderRowIndex = rowIndex;
+            pipeColumn = foundColumn;
+            break;
+          }
+        }
+        if (pipeHeaderRowIndex < 0) continue;
+        for (const row of sheetEntry.rows.slice(pipeHeaderRowIndex + 1)) {
+          const parsed = pipeModuleAndSize(row?.[pipeColumn]);
+          if (parsed && normalize(parsed.moduleName) === normalize(moduleName) && parsed.bucket) {
+            result['MODELLED'][parsed.bucket] += 1;
+          }
+        }
+        continue;
+      }
+
       if (!sheetEntry.header) continue;
       const headerRow = sheetEntry.rows[sheetEntry.header.rowIndex] ?? [];
       const sizeColumn = findColumnByAliases(headerRow, SIZE_HEADER_ALIASES);
@@ -387,12 +419,12 @@ function getSizeStatus(workbooks, moduleName) {
   return result;
 }
 
-function createSizeStatusWorkbook(moduleName, status, planned) {
+function createSizeStatusWorkbook(moduleName, status) {
   const rows = [
     ['1PA-Status', ...SIZE_BUCKETS, 'Grand Total'],
     ['MODELLED', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket]), Object.values(status['MODELLED']).reduce((sum, value) => sum + value, 0)],
     ['NOT MODELLED', ...SIZE_BUCKETS.map((bucket) => status['NOT MODELLED'][bucket]), Object.values(status['NOT MODELLED']).reduce((sum, value) => sum + value, 0)],
-    ['PLANNED', ...SIZE_BUCKETS.map(() => 0), 0],
+    ['PLAND', ...SIZE_BUCKETS.map(() => 0), 0],
     ['GRAND TOTAL', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket] + status['NOT MODELLED'][bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket] + status['NOT MODELLED'][bucket], 0)],
   ];
   const output = XLSX.utils.book_new();
@@ -667,27 +699,9 @@ function Reports({ back, open, excelSession, setExcelSession }) {
 }
 
 function SizeStatusPage({ moduleName, status, back }) {
-  const plannedStorageKey = `rgt:planned-size-status:${normalize(moduleName)}`;
-  const [planned, setPlanned] = useState(() => {
-    const empty = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, 0]));
-    try {
-      const saved = JSON.parse(localStorage.getItem(plannedStorageKey) || '{}');
-      SIZE_BUCKETS.forEach((bucket) => { empty[bucket] = Math.max(0, Number(saved[bucket]) || 0); });
-    } catch { /* keep zero values */ }
-    return empty;
-  });
-  const updatePlanned = (bucket, value) => {
-    const nextValue = Math.max(0, Math.floor(Number(value) || 0));
-    setPlanned((current) => {
-      const next = { ...current, [bucket]: nextValue };
-      try { localStorage.setItem(plannedStorageKey, JSON.stringify(next)); } catch { /* ignore storage errors */ }
-      return next;
-    });
-  };
   const modelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket], 0);
   const notModelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['NOT MODELLED'][bucket], 0);
-  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + planned[bucket], 0);
-  const grandTotal = modelledTotal + notModelledTotal + plannedTotal;
+  const grandTotal = modelledTotal + notModelledTotal;
   return <main className="page size-status-page">
     <header className="top size-status-top">
       <div className="size-status-heading"><p>MODELLING STATUS</p><h1>{moduleName} Size Status</h1></div>
@@ -700,8 +714,8 @@ function SizeStatusPage({ moduleName, status, back }) {
           <tbody>
             <tr><th>MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket]}</td>)}<td>{modelledTotal}</td></tr>
             <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['NOT MODELLED'][bucket]}</td>)}<td>{notModelledTotal}</td></tr>
-            <tr className="size-status-planned"><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}><input type="number" min="0" step="1" value={planned[bucket]} onChange={(event) => updatePlanned(bucket, event.target.value)} aria-label={`Planned ${bucket}`} /></td>)}<td>{plannedTotal}</td></tr>
-            <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + planned[bucket]}</td>)}<td>{grandTotal}</td></tr>
+            <tr><th>PLAND</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>0</td>)}<td>0</td></tr>
+            <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket]}</td>)}<td>{grandTotal}</td></tr>
           </tbody>
         </table>
       </div>
