@@ -441,6 +441,76 @@ function createFluidCodeWorkbook(moduleName, data) {
   XLSX.writeFile(output, `${moduleName} Fluid Code.xlsx`, { compression: true });
 }
 
+
+const STATUS_CODE_HEADER_ALIASES = ['status code', 'statuscode'];
+function getLineStatus(workbooks, moduleName) {
+  const nestedCounts = new Map();
+  const sizes = new Set();
+  const statusCodes = new Set();
+  if (!moduleName) return { sizes: [], statusCodes: [], counts: {}, grandTotal: 0 };
+  for (const workbookEntry of workbooks) {
+    if (!isPipeE3dStatusWorkbook(workbookEntry)) continue;
+    for (const sheetEntry of workbookEntry.sheets) {
+      let headerRowIndex = -1;
+      let pipeColumn = -1;
+      let statusCodeColumn = -1;
+      for (let rowIndex = 0; rowIndex < Math.min(sheetEntry.rows.length, 40); rowIndex += 1) {
+        const row = sheetEntry.rows[rowIndex] ?? [];
+        const foundPipeColumn = findColumnByAliases(row, ['pipe']);
+        const foundStatusCodeColumn = findColumnByAliases(row, STATUS_CODE_HEADER_ALIASES);
+        if (foundPipeColumn >= 0 && foundStatusCodeColumn >= 0) {
+          headerRowIndex = rowIndex;
+          pipeColumn = foundPipeColumn;
+          statusCodeColumn = foundStatusCodeColumn;
+          break;
+        }
+      }
+      if (headerRowIndex < 0) continue;
+      for (const row of sheetEntry.rows.slice(headerRowIndex + 1)) {
+        const parsed = pipeLineParts(row?.[pipeColumn]);
+        if (!parsed || normalize(parsed.moduleName) !== normalize(moduleName)) continue;
+        const statusCode = String(row?.[statusCodeColumn] ?? '').trim().replace(/^\/+/, '').toUpperCase();
+        if (!statusCode) continue;
+        const size = parsed.numericSize;
+        sizes.add(size);
+        statusCodes.add(statusCode);
+        if (!nestedCounts.has(size)) nestedCounts.set(size, new Map());
+        nestedCounts.get(size).set(statusCode, (nestedCounts.get(size).get(statusCode) || 0) + 1);
+      }
+    }
+  }
+  const sortedSizes = [...sizes].sort((a, b) => a - b);
+  const sortedStatusCodes = [...statusCodes].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const counts = Object.fromEntries(sortedSizes.map((size) => [size, Object.fromEntries(sortedStatusCodes.map((statusCode) => [statusCode, nestedCounts.get(size)?.get(statusCode) || 0]))]));
+  const grandTotal = sortedSizes.reduce((total, size) => total + sortedStatusCodes.reduce((sum, statusCode) => sum + (counts[size]?.[statusCode] || 0), 0), 0);
+  return { sizes: sortedSizes, statusCodes: sortedStatusCodes, counts, grandTotal };
+}
+function createLineStatusWorkbook(moduleName, data) {
+  const rows = [
+    ['SIZE', ...data.statusCodes, 'Grand Total'],
+    ...data.sizes.map((size) => [formatPipeSize(size), ...data.statusCodes.map((statusCode) => data.counts[size]?.[statusCode] || 0), data.statusCodes.reduce((sum, statusCode) => sum + (data.counts[size]?.[statusCode] || 0), 0)]),
+    ['GRAND TOTAL', ...data.statusCodes.map((statusCode) => data.sizes.reduce((sum, size) => sum + (data.counts[size]?.[statusCode] || 0), 0)), data.grandTotal],
+  ];
+  const output = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const border = { top: { style: 'thin', color: { rgb: 'FFFFFF' } }, bottom: { style: 'thin', color: { rgb: 'FFFFFF' } }, left: { style: 'thin', color: { rgb: 'FFFFFF' } }, right: { style: 'thin', color: { rgb: 'FFFFFF' } } };
+  for (let r = range.s.r; r <= range.e.r; r += 1) for (let c = range.s.c; c <= range.e.c; c += 1) {
+    const address = XLSX.utils.encode_cell({ r, c });
+    const isHeader = r === 0;
+    const isGrandTotal = r === range.e.r;
+    sheet[address].s = {
+      font: { bold: isHeader || isGrandTotal || c === 0, color: { rgb: isHeader ? 'FFFFFF' : '17324D' } },
+      fill: { patternType: 'solid', fgColor: { rgb: isHeader ? '2498CB' : isGrandTotal ? 'BFD7EA' : 'DCEAF5' } },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border,
+    };
+  }
+  sheet['!cols'] = rows[0].map(() => ({ wch: 16 }));
+  sheet['!rows'] = rows.map(() => ({ hpt: 28 }));
+  XLSX.utils.book_append_sheet(output, sheet, 'Line Status');
+  XLSX.writeFile(output, `${moduleName} Line Status.xlsx`, { compression: true, cellStyles: true });
+}
+
 function getSizeStatus(workbooks, moduleName) {
   const result = {
     'MODELLED': Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, 0])),
@@ -639,7 +709,8 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
   const fluidCodeStatus = useMemo(() => getFluidCodeStatus(workbooks, selected), [workbooks, selected]);
   const fluidCodeGrandTotal = useMemo(() => fluidCodeStatus.fluidCodes.reduce((total, fluidCode) => total + fluidCodeStatus.sizes.reduce((sum, size) => sum + (fluidCodeStatus.counts[fluidCode]?.[size] || 0), 0), 0), [fluidCodeStatus]);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : item === 'Fluid Code' ? fluidCodeGrandTotal : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected, fluidCodeGrandTotal]);
+  const lineStatus = useMemo(() => getLineStatus(workbooks, selected), [workbooks, selected]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : item === 'Fluid Code' ? fluidCodeGrandTotal : item === 'Line Status' ? lineStatus.grandTotal : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected, fluidCodeGrandTotal, lineStatus]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -756,9 +827,12 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   if (statusView === 'Fluid Code' && selected) {
     return <FluidCodePage moduleName={selected} data={fluidCodeStatus} back={() => setStatusView(null)} />;
   }
+  if (statusView === 'Line Status' && selected) {
+    return <LineStatusPage moduleName={selected} data={lineStatus} back={() => setStatusView(null)} />;
+  }
 
   const openIntegrated = (item) => {
-    if ((item === 'Size Status' || item === 'Fluid Code') && selected) {
+    if ((item === 'Size Status' || item === 'Fluid Code' || item === 'Line Status') && selected) {
       setStatusView(item);
       return;
     }
@@ -831,6 +905,25 @@ function FluidCodePage({ moduleName, data, back }) {
         </table>
       </div>
     </section>
+  </main>;
+}
+
+function LineStatusPage({ moduleName, data, back }) {
+  return <main className="page size-status-page">
+    <header className="top size-status-top">
+      <div className="size-status-heading"><p>GATE STATUS</p><h1>{moduleName} Line Status</h1></div>
+      <div className="size-status-actions"><button onClick={() => createLineStatusWorkbook(moduleName, data)}>Download Excel</button><button onClick={back}>Back</button></div>
+    </header>
+    <section className="content size-status-content"><div className="size-status-table-wrap">
+      <table className="size-status-table">
+        <thead><tr><th>SIZE</th>{data.statusCodes.map((statusCode) => <th key={statusCode}>{statusCode}</th>)}<th>Grand Total</th></tr></thead>
+        <tbody>
+          {data.sizes.map((size) => <tr key={size}><th>{formatPipeSize(size)}</th>{data.statusCodes.map((statusCode) => <td key={statusCode}>{data.counts[size]?.[statusCode] || 0}</td>)}<td>{data.statusCodes.reduce((sum, statusCode) => sum + (data.counts[size]?.[statusCode] || 0), 0)}</td></tr>)}
+          <tr className="size-status-grand"><th>GRAND TOTAL</th>{data.statusCodes.map((statusCode) => <td key={statusCode}>{data.sizes.reduce((sum, size) => sum + (data.counts[size]?.[statusCode] || 0), 0)}</td>)}<td>{data.grandTotal}</td></tr>
+        </tbody>
+      </table>
+      {!data.sizes.length ? <div className="empty"><p>LINE STATUS</p><h2>No size-wise Status Code data found</h2><span>Connect an Excel file starting with PIPE_E3D_STATUS-EHH_ that contains PIPE and STATUS CODE columns.</span></div> : null}
+    </div></section>
   </main>;
 }
 
