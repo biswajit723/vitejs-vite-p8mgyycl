@@ -258,3 +258,144 @@ aside > section button.sel:hover {
   box-shadow: 0 0 0 3px rgba(240, 166, 110, 0.28), 0 8px 18px rgba(190, 89, 31, 0.30);
   transform: translateX(4px);
 }
+
+/* Equal-size report/status buttons with compact two-line labels */
+.selected-module-column > div {
+  grid-auto-rows: 88px;
+}
+
+.selected-module-column button {
+  position: relative;
+  width: 100%;
+  height: 88px;
+  min-height: 88px;
+  max-height: 88px;
+  padding: 14px 58px 14px 18px;
+  overflow: hidden;
+  border-radius: 13px;
+  align-items: center;
+}
+
+.selected-module-column button span {
+  display: -webkit-box;
+  overflow: hidden;
+  max-width: 100%;
+  font-size: clamp(14px, 1.05vw, 16px);
+  font-weight: 750;
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.selected-module-column button b {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  transform: translateY(-50%);
+}
+
+.selected-module-column button:hover {
+  transform: translateY(-2px) scale(1.008);
+}
+
+.selected-module-column button:active {
+  transform: translateY(0) scale(.996);
+}
+
+@media (max-width: 1180px) {
+  .selected-module-column > div { grid-auto-rows: 84px; }
+  .selected-module-column button { height: 84px; min-height: 84px; max-height: 84px; }
+  .selected-module-column button span { font-size: 15px; }
+}
+
+@media (max-width: 700px) {
+  .selected-module-column > div { grid-auto-rows: 80px; }
+  .selected-module-column button { height: 80px; min-height: 80px; max-height: 80px; }
+}
+
+/* Final wide, equal report/status buttons: visual-only update */
+.selected-module-columns {
+  grid-template-columns: repeat(4, minmax(250px, 1fr));
+  align-items: start;
+  overflow-x: auto;
+}
+
+.selected-module-column > div {
+  grid-auto-rows: 72px;
+  gap: 12px;
+}
+
+.selected-module-column button {
+  width: 100%;
+  height: 72px;
+  min-height: 72px;
+  max-height: 72px;
+  padding: 12px 58px 12px 20px;
+  border-radius: 13px;
+  overflow: hidden;
+}
+
+.selected-module-column button span {
+  display: -webkit-box;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.22;
+  letter-spacing: -0.012em;
+  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.selected-module-column button b {
+  right: 14px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.selected-module-column button:hover {
+  transform: translateY(-2px);
+}
+
+.selected-module-column button:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 1350px) {
+  .selected-module-columns {
+    grid-template-columns: repeat(4, minmax(230px, 1fr));
+  }
+  .selected-module-column button span { font-size: 14px; }
+}
+
+@media (max-width: 1180px) {
+  .selected-module-columns {
+    grid-template-columns: repeat(2, minmax(260px, 1fr));
+    overflow-x: visible;
+  }
+}
+
+@media (max-width: 700px) {
+  .selected-module-columns { grid-template-columns: 1fr; }
+  .selected-module-column > div { grid-auto-rows: 70px; }
+  .selected-module-column button {
+    height: 70px;
+    min-height: 70px;
+    max-height: 70px;
+  }
+}
