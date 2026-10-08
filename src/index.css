@@ -118,3 +118,47 @@ aside > section button.sel:hover {
   .selected-module-column > div { grid-auto-rows: 70px; }
   .selected-module-column button { height: 70px; min-height: 70px; max-height: 70px; }
 }
+
+/* Restore the Size Status table to the original full-width layout */
+.size-status-content {
+  overflow: visible;
+}
+
+.size-status-table-wrap {
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: visible;
+}
+
+.size-status-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.size-status-table th:first-child,
+.size-status-table td:first-child {
+  width: 24%;
+}
+
+.size-status-table th:not(:first-child),
+.size-status-table td:not(:first-child) {
+  width: auto;
+}
+
+.size-status-table th,
+.size-status-table td {
+  padding: 18px 12px;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.size-status-planned input {
+  width: min(100%, 180px);
+  min-width: 0;
+  max-width: 180px;
+  height: 38px;
+  margin: 0 auto;
+  display: block;
+}

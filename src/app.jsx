@@ -383,7 +383,7 @@ function pipeLineParts(value) {
 }
 
 function formatPipeSize(value) {
-  return Number.isInteger(value) ? `${value}\"` : `${value}\"`;
+  return `${value}\"`;
 }
 
 function getFluidCodeStatus(workbooks, moduleName) {
@@ -408,16 +408,14 @@ function getFluidCodeStatus(workbooks, moduleName) {
         }
       }
       if (headerRowIndex < 0) continue;
-
       for (const row of sheetEntry.rows.slice(headerRowIndex + 1)) {
         const parsed = pipeLineParts(row?.[pipeColumn]);
         if (!parsed || normalize(parsed.moduleName) !== normalize(moduleName)) continue;
-        const fluidCode = String(fluidColumn >= 0 ? row?.[fluidColumn] : parsed.fallbackFluidCode).trim();
+        const fluidCode = String(fluidColumn >= 0 ? row?.[fluidColumn] : parsed.fallbackFluidCode).trim().toUpperCase();
         if (!fluidCode) continue;
         sizes.add(parsed.numericSize);
-        const fluidKey = fluidCode.toUpperCase();
-        if (!counts.has(fluidKey)) counts.set(fluidKey, new Map());
-        const fluidCounts = counts.get(fluidKey);
+        if (!counts.has(fluidCode)) counts.set(fluidCode, new Map());
+        const fluidCounts = counts.get(fluidCode);
         fluidCounts.set(parsed.numericSize, (fluidCounts.get(parsed.numericSize) || 0) + 1);
       }
     }
@@ -435,16 +433,11 @@ function getFluidCodeStatus(workbooks, moduleName) {
 function createFluidCodeWorkbook(moduleName, data) {
   const rows = [
     ['Fluid Code', ...data.sizes.map(formatPipeSize), 'Grand Total'],
-    ...data.fluidCodes.map((fluidCode) => [
-      fluidCode,
-      ...data.sizes.map((size) => data.counts[fluidCode]?.[size] || 0),
-      data.sizes.reduce((sum, size) => sum + (data.counts[fluidCode]?.[size] || 0), 0),
-    ]),
+    ...data.fluidCodes.map((fluidCode) => [fluidCode, ...data.sizes.map((size) => data.counts[fluidCode]?.[size] || 0), data.sizes.reduce((sum, size) => sum + (data.counts[fluidCode]?.[size] || 0), 0)]),
     ['GRAND TOTAL', ...data.sizes.map((size) => data.fluidCodes.reduce((sum, fluidCode) => sum + (data.counts[fluidCode]?.[size] || 0), 0)), data.fluidCodes.reduce((total, fluidCode) => total + data.sizes.reduce((sum, size) => sum + (data.counts[fluidCode]?.[size] || 0), 0), 0)],
   ];
   const output = XLSX.utils.book_new();
-  const sheet = XLSX.utils.aoa_to_sheet(rows);
-  XLSX.utils.book_append_sheet(output, sheet, 'Fluid Code');
+  XLSX.utils.book_append_sheet(output, XLSX.utils.aoa_to_sheet(rows), 'Fluid Code');
   XLSX.writeFile(output, `${moduleName} Fluid Code.xlsx`, { compression: true });
 }
 
@@ -471,8 +464,7 @@ function getSizeStatus(workbooks, moduleName) {
         }
         if (pipeHeaderRowIndex < 0) continue;
         for (const row of sheetEntry.rows.slice(pipeHeaderRowIndex + 1)) {
-          const pipeParts = pipeLineParts(row?.[pipeColumn]);
-          const parsed = pipeParts ? { moduleName: pipeParts.moduleName, bucket: sizeBucket(pipeParts.rawSize) } : null;
+          const parsed = pipeModuleAndSize(row?.[pipeColumn]);
           if (parsed && normalize(parsed.moduleName) === normalize(moduleName) && parsed.bucket) {
             result['MODELLED'][parsed.bucket] += 1;
           }
@@ -645,7 +637,9 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   }, [setExcelSession]);
   const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected]);
+  const fluidCodeStatus = useMemo(() => getFluidCodeStatus(workbooks, selected), [workbooks, selected]);
+  const fluidCodeGrandTotal = useMemo(() => fluidCodeStatus.fluidCodes.reduce((total, fluidCode) => total + fluidCodeStatus.sizes.reduce((sum, size) => sum + (fluidCodeStatus.counts[fluidCode]?.[size] || 0), 0), 0), [fluidCodeStatus]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : item === 'Fluid Code' ? fluidCodeGrandTotal : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected, fluidCodeGrandTotal]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -756,8 +750,6 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   };
 
   const sizeStatus = useMemo(() => getSizeStatus(workbooks, selected), [workbooks, selected]);
-  const fluidCodeStatus = useMemo(() => getFluidCodeStatus(workbooks, selected), [workbooks, selected]);
-
   if (statusView === 'Size Status' && selected) {
     return <SizeStatusPage moduleName={selected} status={sizeStatus} back={() => setStatusView(null)} />;
   }
@@ -781,36 +773,41 @@ function Reports({ back, open, excelSession, setExcelSession }) {
 }
 
 function SizeStatusPage({ moduleName, status, back }) {
-  const storageKey = `rgt:planned-size-status:${normalize(moduleName)}`;
+  const plannedStorageKey = `rgt:planned-size-status:${normalize(moduleName)}`;
   const [planned, setPlanned] = useState(() => {
     const values = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, 0]));
     try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      const saved = JSON.parse(localStorage.getItem(plannedStorageKey) || '{}');
       SIZE_BUCKETS.forEach((bucket) => { values[bucket] = Math.max(0, Number(saved[bucket]) || 0); });
     } catch { /* keep zero values */ }
     return values;
   });
-  const updatePlanned = (bucket, value) => setPlanned((current) => {
-    const next = { ...current, [bucket]: Math.max(0, Math.floor(Number(value) || 0)) };
-    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* ignore storage errors */ }
-    return next;
-  });
+  const updatePlanned = (bucket, value) => {
+    const nextValue = value === '' ? '' : Math.max(0, Math.floor(Number(value) || 0));
+    setPlanned((current) => {
+      const next = { ...current, [bucket]: nextValue };
+      try { localStorage.setItem(plannedStorageKey, JSON.stringify(next)); } catch { /* ignore storage errors */ }
+      return next;
+    });
+  };
+  const plannedNumber = (bucket) => Math.max(0, Number(planned[bucket]) || 0);
   const modelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket], 0);
   const notModelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['NOT MODELLED'][bucket], 0);
-  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + planned[bucket], 0);
+  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + plannedNumber(bucket), 0);
   const grandTotal = modelledTotal + notModelledTotal + plannedTotal;
+  const plannedForExport = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, plannedNumber(bucket)]));
   return <main className="page size-status-page">
     <header className="top size-status-top">
       <div className="size-status-heading"><p>MODELLING STATUS</p><h1>{moduleName} Size Status</h1></div>
-      <div className="size-status-actions"><button onClick={() => createSizeStatusWorkbook(moduleName, status, planned)}>Download Excel</button><button onClick={back}>Back</button></div>
+      <div className="size-status-actions"><button onClick={() => createSizeStatusWorkbook(moduleName, status, plannedForExport)}>Download Excel</button><button onClick={back}>Back</button></div>
     </header>
     <section className="content size-status-content"><div className="size-status-table-wrap"><table className="size-status-table">
       <thead><tr><th>{moduleName}-Status</th>{SIZE_BUCKETS.map((bucket) => <th key={bucket}>{bucket}</th>)}<th>Grand Total</th></tr></thead>
       <tbody>
         <tr><th>MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket]}</td>)}<td>{modelledTotal}</td></tr>
         <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['NOT MODELLED'][bucket]}</td>)}<td>{notModelledTotal}</td></tr>
-        <tr><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}><input type="number" min="0" step="1" value={planned[bucket]} onChange={(event) => updatePlanned(bucket, event.target.value)} /></td>)}<td>{plannedTotal}</td></tr>
-        <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + planned[bucket]}</td>)}<td>{grandTotal}</td></tr>
+        <tr className="size-status-planned"><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}><input type="number" min="0" step="1" inputMode="numeric" value={planned[bucket]} onChange={(event) => updatePlanned(bucket, event.target.value)} onBlur={() => updatePlanned(bucket, plannedNumber(bucket))} aria-label={`Planned ${bucket}`} /></td>)}<td>{plannedTotal}</td></tr>
+        <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + plannedNumber(bucket)}</td>)}<td>{grandTotal}</td></tr>
       </tbody>
     </table></div></section>
   </main>;
@@ -823,13 +820,17 @@ function FluidCodePage({ moduleName, data, back }) {
       <div className="size-status-heading"><p>MODELLING STATUS</p><h1>{moduleName} Fluid Code</h1></div>
       <div className="size-status-actions"><button onClick={() => createFluidCodeWorkbook(moduleName, data)}>Download Excel</button><button onClick={back}>Back</button></div>
     </header>
-    <section className="content size-status-content"><div className="size-status-table-wrap"><table className="size-status-table">
-      <thead><tr><th>Fluid Code</th>{data.sizes.map((size) => <th key={size}>{formatPipeSize(size)}</th>)}<th>Grand Total</th></tr></thead>
-      <tbody>
-        {data.fluidCodes.map((fluidCode) => <tr key={fluidCode}><th>{fluidCode}</th>{data.sizes.map((size) => <td key={size}>{data.counts[fluidCode]?.[size] || 0}</td>)}<td>{data.sizes.reduce((sum, size) => sum + (data.counts[fluidCode]?.[size] || 0), 0)}</td></tr>)}
-        <tr className="size-status-grand"><th>GRAND TOTAL</th>{data.sizes.map((size) => <td key={size}>{data.fluidCodes.reduce((sum, fluidCode) => sum + (data.counts[fluidCode]?.[size] || 0), 0)}</td>)}<td>{grandTotal}</td></tr>
-      </tbody>
-    </table></div></section>
+    <section className="content size-status-content">
+      <div className="size-status-table-wrap">
+        <table className="size-status-table">
+          <thead><tr><th>Fluid Code</th>{data.sizes.map((size) => <th key={size}>{formatPipeSize(size)}</th>)}<th>Grand Total</th></tr></thead>
+          <tbody>
+            {data.fluidCodes.map((fluidCode) => <tr key={fluidCode}><th>{fluidCode}</th>{data.sizes.map((size) => <td key={size}>{data.counts[fluidCode]?.[size] || 0}</td>)}<td>{data.sizes.reduce((sum, size) => sum + (data.counts[fluidCode]?.[size] || 0), 0)}</td></tr>)}
+            <tr className="size-status-grand"><th>GRAND TOTAL</th>{data.sizes.map((size) => <td key={size}>{data.fluidCodes.reduce((sum, fluidCode) => sum + (data.counts[fluidCode]?.[size] || 0), 0)}</td>)}<td>{grandTotal}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </main>;
 }
 
