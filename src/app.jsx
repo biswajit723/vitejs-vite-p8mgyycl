@@ -387,7 +387,7 @@ function getSizeStatus(workbooks, moduleName) {
   return result;
 }
 
-function createSizeStatusWorkbook(moduleName, status) {
+function createSizeStatusWorkbook(moduleName, status, planned) {
   const rows = [
     ['1PA-Status', ...SIZE_BUCKETS, 'Grand Total'],
     ['MODELLED', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket]), Object.values(status['MODELLED']).reduce((sum, value) => sum + value, 0)],
@@ -667,9 +667,27 @@ function Reports({ back, open, excelSession, setExcelSession }) {
 }
 
 function SizeStatusPage({ moduleName, status, back }) {
+  const plannedStorageKey = `rgt:planned-size-status:${normalize(moduleName)}`;
+  const [planned, setPlanned] = useState(() => {
+    const empty = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, 0]));
+    try {
+      const saved = JSON.parse(localStorage.getItem(plannedStorageKey) || '{}');
+      SIZE_BUCKETS.forEach((bucket) => { empty[bucket] = Math.max(0, Number(saved[bucket]) || 0); });
+    } catch { /* keep zero values */ }
+    return empty;
+  });
+  const updatePlanned = (bucket, value) => {
+    const nextValue = Math.max(0, Math.floor(Number(value) || 0));
+    setPlanned((current) => {
+      const next = { ...current, [bucket]: nextValue };
+      try { localStorage.setItem(plannedStorageKey, JSON.stringify(next)); } catch { /* ignore storage errors */ }
+      return next;
+    });
+  };
   const modelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket], 0);
   const notModelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['NOT MODELLED'][bucket], 0);
-  const grandTotal = modelledTotal + notModelledTotal;
+  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + planned[bucket], 0);
+  const grandTotal = modelledTotal + notModelledTotal + plannedTotal;
   return <main className="page size-status-page">
     <header className="top size-status-top">
       <div className="size-status-heading"><p>MODELLING STATUS</p><h1>{moduleName} Size Status</h1></div>
@@ -682,8 +700,8 @@ function SizeStatusPage({ moduleName, status, back }) {
           <tbody>
             <tr><th>MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket]}</td>)}<td>{modelledTotal}</td></tr>
             <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['NOT MODELLED'][bucket]}</td>)}<td>{notModelledTotal}</td></tr>
-            <tr><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>0</td>)}<td>0</td></tr>
-            <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket]}</td>)}<td>{grandTotal}</td></tr>
+            <tr className="size-status-planned"><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}><input type="number" min="0" step="1" value={planned[bucket]} onChange={(event) => updatePlanned(bucket, event.target.value)} aria-label={`Planned ${bucket}`} /></td>)}<td>{plannedTotal}</td></tr>
+            <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + planned[bucket]}</td>)}<td>{grandTotal}</td></tr>
           </tbody>
         </table>
       </div>

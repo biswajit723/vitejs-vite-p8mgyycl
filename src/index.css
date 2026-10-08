@@ -399,3 +399,19 @@ aside > section button.sel:hover {
     max-height: 70px;
   }
 }
+
+/* Planned is the only manually editable Size Status row */
+.size-status-planned input {
+  width: 78px;
+  max-width: 100%;
+  padding: 9px 8px;
+  border: 1px solid #9fc5df;
+  border-radius: 8px;
+  background: #f7fbfe;
+  color: #102a43;
+  font-weight: 700;
+  text-align: center;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+.size-status-planned input:hover { border-color: #5f9fc7; background: #ffffff; }
+.size-status-planned input:focus { outline: 0; border-color: #287fb9; box-shadow: 0 0 0 3px rgba(40,127,185,.18); background: #ffffff; }
