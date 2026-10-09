@@ -57,43 +57,13 @@ function findHeader(rows) {
 
 async function parseWorkbook(file) {
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true, cellStyles: true, dense: true });
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true, cellStyles: true });
   const sheets = workbook.SheetNames.map((sheetName) => {
     const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null, blankrows: false });
-    const header = findHeader(rows);
-    const moduleRows = new Map();
-    if (header) {
-      for (let rowIndex = header.rowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
-        const row = rows[rowIndex];
-        const key = normalize(row?.[header.moduleColumn]);
-        if (!key) continue;
-        if (!moduleRows.has(key)) moduleRows.set(key, []);
-        moduleRows.get(key).push(row);
-      }
-    }
-    return { sheetName, sheet, rows, header, moduleRows };
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    return { sheetName, sheet, rows, header: findHeader(rows) };
   });
   return { file, workbook, sheets };
-}
-
-async function parseWorkbooksFast(files, onProgress) {
-  const results = new Array(files.length);
-  let nextIndex = 0;
-  let completed = 0;
-  const workerCount = Math.min(files.length, Math.max(2, Math.min(4, navigator.hardwareConcurrency || 4)));
-  const worker = async () => {
-    while (nextIndex < files.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await parseWorkbook(files[index]);
-      completed += 1;
-      onProgress?.(completed, files.length, files[index].name);
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-    }
-  };
-  await Promise.all(Array.from({ length: workerCount }, worker));
-  return results;
 }
 
 function reportScore(entry, reportName) {
@@ -116,7 +86,6 @@ function findReportWorkbook(workbooks, reportName) {
 function rowsForModule(sheetEntry, moduleName) {
   if (!sheetEntry.header) return [];
   const moduleKey = normalize(moduleName);
-  if (sheetEntry.moduleRows) return sheetEntry.moduleRows.get(moduleKey) || [];
   return sheetEntry.rows.slice(sheetEntry.header.rowIndex + 1).filter((row) => normalize(row?.[sheetEntry.header.moduleColumn]) === moduleKey);
 }
 
@@ -706,22 +675,6 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   const [centralStatus, setCentralStatus] = useState('loading');
   const { folderName, workbooks, modules } = excelSession;
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState(null);
-  const [tokenModal, setTokenModal] = useState(null);
-  const noticeTimerRef = useRef(null);
-  const showNotice = (type, title, message, persistent = false) => {
-    window.clearTimeout(noticeTimerRef.current);
-    setNotice({ type, title, message, persistent });
-    if (!persistent) noticeTimerRef.current = window.setTimeout(() => setNotice(null), 4200);
-  };
-  const requestAdminToken = () => new Promise((resolve) => setTokenModal({ value: '', resolve }));
-  const closeTokenModal = (value = '') => {
-    setTokenModal((current) => {
-      current?.resolve(value.trim());
-      return null;
-    });
-  };
-  useEffect(() => () => window.clearTimeout(noticeTimerRef.current), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -762,13 +715,11 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
     const files = Array.from(event.target.files ?? []).filter((file) => /\.(xlsx|xls|xlsm|xlsb)$/i.test(file.name) && !file.name.startsWith('~$'));
-    if (!files.length) { showNotice('warning', 'No Excel file found', 'Select a folder containing .xlsx, .xls, .xlsm or .xlsb files.'); return; }
+    if (!files.length) { window.alert('No Excel file found in the selected folder.'); return; }
     setBusy(true);
-    showNotice('loading', 'Connecting Excel folder', 'Preparing ' + files.length + ' Excel file' + (files.length === 1 ? '' : 's') + '...', true);
     try {
-      const parsed = await parseWorkbooksFast(files, (completed, total, fileName) => {
-        showNotice('loading', 'Reading Excel files', completed + ' of ' + total + ' processed · ' + fileName, true);
-      });
+      const parsed = [];
+      for (const file of files) parsed.push(await parseWorkbook(file));
       const moduleMap = new Map();
       for (const workbookEntry of parsed) {
         for (const sheetEntry of workbookEntry.sheets) {
@@ -788,14 +739,14 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       cacheModules(dynamicModules);
       setSelected((current) => dynamicModules.some((item) => normalize(item) === normalize(current)) ? current : null);
       if (!dynamicModules.length) {
-        showNotice('warning', 'Folder connected', 'No Module or Module Name column was found in the connected Excel files.');
+        window.alert('Excel files connected, but no Module/Module Name column was found.');
         return;
       }
 
       let adminToken = '';
       try { adminToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || ''; } catch { /* ignore */ }
       if (!adminToken) {
-        adminToken = await requestAdminToken();
+        adminToken = window.prompt('ADMIN SYNC TOKEN\nEnter the admin token to publish this module list for all website users.\nCancel keeps the list local only.') || '';
         if (adminToken) {
           try { sessionStorage.setItem(ADMIN_TOKEN_KEY, adminToken); } catch { /* ignore */ }
         }
@@ -807,20 +758,18 @@ function Reports({ back, open, excelSession, setExcelSession }) {
             setCentralStatus('offline');
           } else {
             setCentralStatus('connected');
-            showNotice('success', 'Excel folder connected', files.length + ' files processed. Master module list published for all users.');
+            window.alert('Master module list published successfully. All users will see this module list.');
           }
         } catch (error) {
           console.error(error);
           try { sessionStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* ignore */ }
           setCentralStatus('offline');
-          showNotice('warning', 'Connected locally', 'Excel data is ready, but central publish failed: ' + error.message);
+          window.alert(`Module list was loaded locally, but central publish failed.\n${error.message}`);
         }
-      } else {
-        showNotice('success', 'Excel folder connected', files.length + ' files processed successfully. ' + dynamicModules.length + ' modules are ready.');
       }
     } catch (error) {
       console.error(error);
-      showNotice('error', 'Excel connection failed', 'The folder could not be read. Check the workbook format and try again.');
+      window.alert('Excel folder could not be read. Please check the workbook format.');
     } finally {
       setBusy(false);
       event.target.value = '';
@@ -894,14 +843,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
     ? (centralStatus === 'connected' ? 'Connected: MASTER MODULE LIST' : folderName ? `Connected: ${folderName}` : 'Module list loaded')
     : 'No master module list connected';
 
-  return <>
-    <style>{`
-      .rgt-notice-stack{position:fixed;top:0;left:0;right:0;z-index:10000;width:100%;pointer-events:none}.rgt-notice{pointer-events:auto;min-height:64px;display:grid;grid-template-columns:42px minmax(0,1fr) 30px;gap:12px;align-items:center;padding:11px max(24px,calc((100vw - 1440px)/2 + 24px));border:0;border-bottom:1px solid rgba(148,163,184,.32);border-radius:0;background:linear-gradient(90deg,rgba(8,47,73,.98),rgba(15,23,42,.98));box-shadow:0 8px 28px rgba(15,23,42,.2);color:#fff;backdrop-filter:blur(16px);animation:rgtNoticeDown .3s cubic-bezier(.2,.8,.2,1)}.rgt-notice-icon{width:40px;height:40px;display:grid;place-items:center;border-radius:12px;background:#0ea5e9;font-weight:900}.rgt-notice.success .rgt-notice-icon{background:#10b981}.rgt-notice.warning .rgt-notice-icon{background:#f59e0b}.rgt-notice.error .rgt-notice-icon{background:#ef4444}.rgt-notice.loading .rgt-notice-icon:after{content:'';width:18px;height:18px;border:3px solid rgba(255,255,255,.42);border-top-color:#fff;border-radius:50%;animation:rgtSpin .8s linear infinite}.rgt-notice strong{display:block;font-size:14px;line-height:1.25}.rgt-notice p{margin:4px 0 0;color:#cbd5e1;font-size:12px;line-height:1.45;word-break:break-word}.rgt-notice-close{border:0;background:transparent;color:#94a3b8;font-size:22px;cursor:pointer}.rgt-token-backdrop{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:20px;background:rgba(15,23,42,.55);backdrop-filter:blur(6px);animation:rgtFade .2s ease}.rgt-token-modal{width:min(430px,100%);padding:24px;border-radius:20px;background:#fff;box-shadow:0 30px 90px rgba(15,23,42,.38)}.rgt-token-modal p{margin:0;color:#0284c7;font-size:12px;font-weight:800;letter-spacing:.12em}.rgt-token-modal h3{margin:7px 0 8px;color:#0f172a}.rgt-token-modal span{display:block;color:#64748b;font-size:13px;line-height:1.5}.rgt-token-modal input{box-sizing:border-box;width:100%;margin:18px 0;padding:12px 14px;border:1px solid #cbd5e1;border-radius:11px;outline:none}.rgt-token-modal input:focus{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,.14)}.rgt-token-actions{display:flex;justify-content:flex-end;gap:10px}.rgt-token-actions button{padding:10px 15px;border:0;border-radius:10px;cursor:pointer;font-weight:700}.rgt-token-actions button:first-child{background:#e2e8f0;color:#334155}.rgt-token-actions button:last-child{background:#0284c7;color:#fff}@keyframes rgtSpin{to{transform:rotate(360deg)}}@keyframes rgtNoticeDown{from{opacity:0;transform:translate3d(0,-100%,0)}to{opacity:1;transform:none}}@keyframes rgtFade{from{opacity:0}to{opacity:1}}@media(max-width:640px){.rgt-notice{min-height:58px;padding:10px 14px;grid-template-columns:38px minmax(0,1fr) 28px}.rgt-notice-icon{width:36px;height:36px}.rgt-notice p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-    `}</style>
-    {notice ? <div className="rgt-notice-stack" role="status" aria-live="polite"><div className={'rgt-notice ' + notice.type}><div className="rgt-notice-icon">{notice.type === 'success' ? '✓' : notice.type === 'warning' ? '!' : notice.type === 'error' ? '×' : ''}</div><div><strong>{notice.title}</strong><p>{notice.message}</p></div>{notice.persistent ? null : <button className="rgt-notice-close" onClick={() => setNotice(null)} aria-label="Close notification">×</button>}</div></div> : null}
-    {tokenModal ? <div className="rgt-token-backdrop" role="dialog" aria-modal="true" aria-labelledby="rgt-token-title"><form className="rgt-token-modal" onSubmit={(event) => { event.preventDefault(); closeTokenModal(tokenModal.value); }}><p>SECURE ADMIN SYNC</p><h3 id="rgt-token-title">Publish module list</h3><span>Enter the admin token to publish this module list for all website users. You can continue locally without publishing.</span><input autoFocus type="password" value={tokenModal.value} onChange={(event) => setTokenModal((current) => ({ ...current, value: event.target.value }))} placeholder="Admin sync token" autoComplete="off"/><div className="rgt-token-actions"><button type="button" onClick={() => closeTokenModal('')}>Keep Local</button><button type="submit" disabled={!tokenModal.value.trim()}>Publish</button></div></form></div> : null}
-    <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="folder-connect"><button onClick={connectFolder}>Connect Excel Folder</button><span>{moduleSourceText}</span><input ref={inputRef} className="hidden-folder-input" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple webkitdirectory="" directory="" onChange={loadFolder}/></div><label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label><section>{list.map((moduleName) => <button className={moduleName === selected ? 'sel' : ''} key={moduleName} onClick={() => setSelected((current) => current === moduleName ? null : moduleName)}>{moduleName}</button>)}</section></aside><article className="reports">{selected ? <><header><div><p>SELECTED MODULE</p><h2>{selected}</h2></div><div className="selected-module-actions"><button className="header-download-button" onClick={downloadModuleExcel}>Download {selected} Excel</button><button onClick={() => setSelected(null)}>Close</button></div></header><section className="selected-module-columns">{GROUPS.map(([groupName, items], groupIndex) => <div className="selected-module-column" key={groupName}><h3>{groupName}</h3><div>{items.map((item, itemIndex) => { const isReport = REPORTS.includes(item); const isSizeStatus = item === 'Size Status'; const count = isSizeStatus ? null : (busy ? '…' : counts[item] ?? 0); return <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => isReport ? downloadReport(item) : openIntegrated(item)}><span>{item}</span>{count !== null ? <b>{count}</b> : null}</button>; })}</div></div>)}</section></> : <div className="empty"><b>RGT</b><p>MODULE SELECTION</p><h2>{busy ? 'Reading Excel files…' : modules.length ? 'Select a module' : 'Connect the master Excel folder'}</h2><span>{modules.length ? 'Select a module on the left to open reports here.' : 'The module list will be created automatically from the Module column.'}</span></div>}</article></div><Integrated open={openIntegrated}/></Layout>
-  </>;
+  return <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="folder-connect"><button onClick={connectFolder}>Connect Excel Folder</button><span>{moduleSourceText}</span><input ref={inputRef} className="hidden-folder-input" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple webkitdirectory="" directory="" onChange={loadFolder}/></div><label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label><section>{list.map((moduleName) => <button className={moduleName === selected ? 'sel' : ''} key={moduleName} onClick={() => setSelected((current) => current === moduleName ? null : moduleName)}>{moduleName}</button>)}</section></aside><article className="reports">{selected ? <><header><div><p>SELECTED MODULE</p><h2>{selected}</h2></div><div className="selected-module-actions"><button className="header-download-button" onClick={downloadModuleExcel}>Download {selected} Excel</button><button onClick={() => setSelected(null)}>Close</button></div></header><section className="selected-module-columns">{GROUPS.map(([groupName, items], groupIndex) => <div className="selected-module-column" key={groupName}><h3>{groupName}</h3><div>{items.map((item, itemIndex) => { const isReport = REPORTS.includes(item); const isSizeStatus = item === 'Size Status'; const count = isSizeStatus ? null : (busy ? '…' : counts[item] ?? 0); return <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => isReport ? downloadReport(item) : openIntegrated(item)}><span>{item}</span>{count !== null ? <b>{count}</b> : null}</button>; })}</div></div>)}</section></> : <div className="empty"><b>RGT</b><p>MODULE SELECTION</p><h2>{busy ? 'Reading Excel files…' : modules.length ? 'Select a module' : 'Connect the master Excel folder'}</h2><span>{modules.length ? 'Select a module on the left to open reports here.' : 'The module list will be created automatically from the Module column.'}</span></div>}</article></div><Integrated open={openIntegrated}/></Layout>;
 }
 
 function SizeStatusPage({ moduleName, status, back }) {
