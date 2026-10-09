@@ -609,13 +609,12 @@ function getSizeStatus(workbooks, moduleName) {
 }
 
 function createSizeStatusWorkbook(moduleName, status, planned) {
-  const calculatedNotModelled = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, Math.max(0, planned[bucket] - status['MODELLED'][bucket])]));
   const rows = [
     [`${moduleName}-Status`, ...SIZE_BUCKETS, 'Grand Total'],
     ['MODELLED', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket]), Object.values(status['MODELLED']).reduce((sum, value) => sum + value, 0)],
-    ['NOT MODELLED', ...SIZE_BUCKETS.map((bucket) => calculatedNotModelled[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + calculatedNotModelled[bucket], 0)],
+    ['NOT MODELLED', ...SIZE_BUCKETS.map((bucket) => status['NOT MODELLED'][bucket]), Object.values(status['NOT MODELLED']).reduce((sum, value) => sum + value, 0)],
     ['PLANNED', ...SIZE_BUCKETS.map((bucket) => planned[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + planned[bucket], 0)],
-    ['GRAND TOTAL', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket] + calculatedNotModelled[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket] + calculatedNotModelled[bucket], 0)],
+    ['GRAND TOTAL', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + planned[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + planned[bucket], 0)],
   ];
   const output = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
@@ -957,12 +956,11 @@ function SizeStatusPage({ moduleName, status, back }) {
     });
   };
   const plannedNumber = (bucket) => Math.max(0, Number(planned[bucket]) || 0);
-  const plannedForExport = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, plannedNumber(bucket)]));
-  const calculatedNotModelled = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, Math.max(0, plannedForExport[bucket] - status['MODELLED'][bucket])]));
   const modelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket], 0);
-  const notModelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + calculatedNotModelled[bucket], 0);
-  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + plannedForExport[bucket], 0);
-  const grandTotal = modelledTotal + notModelledTotal;
+  const notModelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['NOT MODELLED'][bucket], 0);
+  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + plannedNumber(bucket), 0);
+  const grandTotal = modelledTotal + notModelledTotal + plannedTotal;
+  const plannedForExport = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, plannedNumber(bucket)]));
   return <main className="page size-status-page">
     <header className="top size-status-top">
       <div className="size-status-heading"><p>MODELLING STATUS</p><h1>{moduleName} Size Status</h1></div>
@@ -972,9 +970,9 @@ function SizeStatusPage({ moduleName, status, back }) {
       <thead><tr><th>{moduleName}-Status</th>{SIZE_BUCKETS.map((bucket) => <th key={bucket}>{bucket}</th>)}<th>Grand Total</th></tr></thead>
       <tbody>
         <tr><th>MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket]}</td>)}<td>{modelledTotal}</td></tr>
-        <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{calculatedNotModelled[bucket]}</td>)}<td>{notModelledTotal}</td></tr>
+        <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['NOT MODELLED'][bucket]}</td>)}<td>{notModelledTotal}</td></tr>
         <tr className="size-status-planned"><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}><input type="number" min="0" step="1" inputMode="numeric" value={planned[bucket]} onChange={(event) => updatePlanned(bucket, event.target.value)} onBlur={() => updatePlanned(bucket, plannedNumber(bucket))} aria-label={`Planned ${bucket}`} /></td>)}<td>{plannedTotal}</td></tr>
-        <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + calculatedNotModelled[bucket]}</td>)}<td>{grandTotal}</td></tr>
+        <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + plannedNumber(bucket)}</td>)}<td>{grandTotal}</td></tr>
       </tbody>
     </table></div></section>
   </main>;
@@ -1040,8 +1038,8 @@ function SupportToolsPage({ moduleName, open, back }) {
       .support-tools-panel{padding:24px;border:1px solid #d7e5f0;border-radius:24px;background:#dceaf5;box-shadow:0 14px 34px rgba(23,50,77,.1)}
       .support-tools-panel h3{margin:0 0 20px;text-align:center;color:#172b3c;font-size:23px;font-weight:700}
       .support-tools-buttons{display:grid;gap:10px}.support-tools-buttons button{min-height:58px;padding:12px 16px;border:2px solid rgba(255,255,255,.92);border-radius:9px;color:#fff;font-size:14px;font-weight:800;box-shadow:0 5px 12px rgba(23,50,77,.14);cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}.support-tools-buttons button:hover{transform:translateY(-2px);box-shadow:0 9px 18px rgba(23,50,77,.2);filter:brightness(1.04)}.support-tools-buttons button:active{transform:translateY(0)}
-      .support-span-buttons button:first-child{min-height:88px;background:#147eb3}.support-span-buttons button:last-child{min-height:88px;background:#17699a}
-      .support-load-buttons button:nth-child(1){background:#167fb4}.support-load-buttons button:nth-child(2){background:#126f9f}.support-load-buttons button:nth-child(3){background:#1b8fc4}.support-load-buttons button:nth-child(4){background:#197caf}.support-load-buttons button:nth-child(5){background:#155f8e}
+      .support-span-buttons button:first-child{min-height:88px;background:#2196cf}.support-span-buttons button:last-child{min-height:88px;background:#704b9c}
+      .support-load-buttons button:nth-child(1){background:#ef615d}.support-load-buttons button:nth-child(2){background:#08766e}.support-load-buttons button:nth-child(3){background:#63ae55}.support-load-buttons button:nth-child(4){background:#258fca}.support-load-buttons button:nth-child(5){background:#79529b}
       @media(max-width:760px){.support-tools-content{padding:18px!important}.support-tools-grid{grid-template-columns:1fr}.support-tools-panel{padding:18px;border-radius:18px}.support-tools-panel h3{font-size:20px}}
     `}</style>
     <header className="top support-tools-top">
