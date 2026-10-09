@@ -197,12 +197,6 @@ function findAttaReportWorkbook(workbooks) {
 function findPrimarySupportReportWorkbook(workbooks) {
   return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_SUPPORT_REPORT')) ?? null;
 }
-function findElbowBendReportWorkbook(workbooks) {
-  return workbooks.find((entry) => {
-    const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
-    return normalize(fileNameWithoutExtension).startsWith(normalize('EHH_ELBOW_BEND_ANG_REPORT'));
-  }) ?? null;
-}
 function countValveRemarks(workbooks, moduleName) {
   const workbookEntry = findValveReportWorkbook(workbooks);
   if (!workbookEntry) return 0;
@@ -220,9 +214,6 @@ function countAttaRemarks(workbooks, moduleName) {
 }
 function countPrimarySupportRemarks(workbooks, moduleName) {
   return countReportRemarks(findPrimarySupportReportWorkbook(workbooks), moduleName);
-}
-function countElbowBendRemarks(workbooks, moduleName) {
-  return countReportRemarks(findElbowBendReportWorkbook(workbooks), moduleName);
 }
 function copyExactHeaderFill(sourceSheet, outputSheet, headerRowIndex) {
   const range = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
@@ -766,7 +757,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   const fluidCodeStatus = useMemo(() => getFluidCodeStatus(workbooks, selected), [workbooks, selected]);
   const fluidCodeGrandTotal = useMemo(() => fluidCodeStatus.fluidCodes.reduce((total, fluidCode) => total + fluidCodeStatus.sizes.reduce((sum, size) => sum + (fluidCodeStatus.counts[fluidCode]?.[size] || 0), 0), 0), [fluidCodeStatus]);
   const lineStatus = useMemo(() => getLineStatus(workbooks, selected), [workbooks, selected]);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : item === 'Elbow and Bend Report' ? countElbowBendRemarks(workbooks, selected) : item === 'Fluid Code' ? fluidCodeGrandTotal : item === 'Line Status' ? lineStatus.grandTotal : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected, fluidCodeGrandTotal, lineStatus]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : item === 'Fluid Code' ? fluidCodeGrandTotal : item === 'Line Status' ? lineStatus.grandTotal : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected, fluidCodeGrandTotal, lineStatus]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -873,12 +864,6 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       const workbookEntry = findPrimarySupportReportWorkbook(workbooks);
       if (!workbookEntry) { window.alert('No EHH_SUPPORT_REPORT Excel file was found in the connected folder.'); return; }
       if (!createNamedRemarksWorkbook(workbookEntry, selected, 'Primary Support Report')) window.alert(`No ${selected} row with remarks was found for Primary Support Report.`);
-      return;
-    }
-    if (reportName === 'Elbow and Bend Report') {
-      const workbookEntry = findElbowBendReportWorkbook(workbooks);
-      if (!workbookEntry) { window.alert('No EHH_ELBOW_BEND_ANG_REPORT Excel file was found in the connected folder.'); return; }
-      if (!createNamedRemarksWorkbook(workbookEntry, selected, 'Elbow and Bend Report')) window.alert('No ' + selected + ' row with remarks was found for Elbow and Bend Report.');
       return;
     }
     const workbookEntry = findReportWorkbook(workbooks, reportName);
