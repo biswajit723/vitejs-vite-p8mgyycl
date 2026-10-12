@@ -128,6 +128,186 @@ function getIsoPlanningModules(workbooks) {
   return [...modules.values()];
 }
 
+const ISO_FILE_PREFIX = '4193_HH_Isometrics Control Sheet-Piping_OFSI';
+const ISO_PIPE_ALIASES = ['pipe name', 'pipename'];
+const ISO_REVISION_ALIASES = ['latest revision', 'latestrevision'];
+const ISO_DOCUMENTUM_ALIASES = ['documentum cp status', 'documentumcpstatus'];
+const ISO_HOLD_ALIASES = ['hold', 'hold status', 'iso hold', 'on hold'];
+const ISO_STAGE_DEFINITIONS = [
+  { key: 'isoExtraction', label: 'ISO EXTRACTION', aliases: ['iso extraction', 'isoextraction'] },
+  { key: 'layoutCheck', label: 'LAYOUT CHECK', aliases: ['layout check', 'layoutcheck'] },
+  { key: 'stressCheck', label: 'STRESS CHECK', aliases: ['stress check', 'stresscheck'] },
+  { key: 'supportCheck', label: 'SUPPORT CHECK', aliases: ['support check', 'supportcheck'] },
+  { key: 'backDraft', label: 'BACK DRAFT', aliases: ['back draft', 'backdraft'] },
+  { key: 'backCheck', label: 'BACK CHECK', aliases: ['back check', 'backcheck'] },
+  { key: 'qcCheck', label: 'QC CHECK', aliases: ['qc check', 'qccheck'] },
+  { key: 'moduleEngineerCheck', label: 'MODULE ENGINEER CHECK', aliases: ['module engineer check', 'moduleengineercheck'] },
+  { key: 'toCp', label: 'TO CP', aliases: ['to cp', 'tocp'] },
+];
+
+function isoModuleFromPipeName(value) {
+  const text = String(value ?? '').trim().replace(/^\/+/, '');
+  if (!text) return '';
+  return text.split('-').map((part) => part.trim()).filter(Boolean)[0] || '';
+}
+function isExcelDateValue(value) {
+  if (value instanceof Date) return !Number.isNaN(value.getTime());
+  if (typeof value === 'number') return value > 1 && value < 100000;
+  const text = String(value ?? '').trim();
+  if (!text || normalize(text).includes('linedeleted')) return false;
+  if (!/[\/\-.]/.test(text) || !/\d/.test(text)) return false;
+  return !Number.isNaN(Date.parse(text));
+}
+function isNonZeroRevision(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return false;
+  const number = Number(String(value).trim().replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(number) && number !== 0;
+}
+function isHoldValue(value) {
+  return normalize(value) === 'yes';
+}
+function buildIsoPlanningData(workbooks) {
+  const moduleRows = new Map();
+  for (const workbookEntry of workbooks) {
+    if (!isIsoPlanningWorkbook(workbookEntry)) continue;
+    for (const sheetEntry of workbookEntry.sheets) {
+      let headerRowIndex = -1;
+      let pipeColumn = -1;
+      let moduleColumn = -1;
+      let issuedColumn = -1;
+      let revisionColumn = -1;
+      let holdColumn = -1;
+      let stageColumns = {};
+      for (let rowIndex = 0; rowIndex < Math.min(sheetEntry.rows.length, 60); rowIndex += 1) {
+        const row = sheetEntry.rows[rowIndex] ?? [];
+        const foundPipe = findColumnByAliases(row, ISO_PIPE_ALIASES);
+        if (foundPipe < 0) continue;
+        headerRowIndex = rowIndex;
+        pipeColumn = foundPipe;
+        moduleColumn = row.findIndex(isModuleHeader);
+        issuedColumn = findColumnByAliases(row, ISO_DOCUMENTUM_ALIASES);
+        revisionColumn = findColumnByAliases(row, ISO_REVISION_ALIASES);
+        holdColumn = findColumnByAliases(row, ISO_HOLD_ALIASES);
+        stageColumns = Object.fromEntries(ISO_STAGE_DEFINITIONS.map((stage) => [stage.key, findColumnByAliases(row, stage.aliases)]));
+        break;
+      }
+      if (headerRowIndex < 0) continue;
+      for (const row of sheetEntry.rows.slice(headerRowIndex + 1)) {
+        const pipeName = String(row?.[pipeColumn] ?? '').trim();
+        if (!pipeName || normalize(pipeName).includes('grandtotal')) continue;
+        const moduleName = String(moduleColumn >= 0 ? row?.[moduleColumn] ?? '' : '').trim() || isoModuleFromPipeName(pipeName);
+        if (!moduleName) continue;
+        const key = normalize(moduleName);
+        if (!moduleRows.has(key)) moduleRows.set(key, { moduleName, entries: [] });
+        moduleRows.get(key).entries.push({ row, sheetEntry, pipeColumn, issuedColumn, revisionColumn, holdColumn, stageColumns });
+      }
+    }
+  }
+  return [...moduleRows.values()].sort((a, b) => a.moduleName.localeCompare(b.moduleName, undefined, { numeric: true, sensitivity: 'base' }));
+}
+function isoMetricRows(moduleData, metric) {
+  const entries = moduleData?.entries || [];
+  if (metric === 'total') return entries;
+  if (metric === 'issued') return entries.filter((entry) => entry.issuedColumn >= 0 && isExcelDateValue(entry.row?.[entry.issuedColumn]));
+  if (metric === 'revision') return entries.filter((entry) => entry.revisionColumn >= 0 && isNonZeroRevision(entry.row?.[entry.revisionColumn]));
+  if (metric === 'hold') return entries.filter((entry) => entry.holdColumn >= 0 && isHoldValue(entry.row?.[entry.holdColumn]));
+  if (metric === 'balance') return entries.filter((entry) => !(entry.issuedColumn >= 0 && isExcelDateValue(entry.row?.[entry.issuedColumn])) && !(entry.holdColumn >= 0 && isHoldValue(entry.row?.[entry.holdColumn])));
+  return [];
+}
+function isIsoStageTick(value) {
+  if (value === true || value === 1) return true;
+  const key = normalize(value);
+  return ['true', 'yes', 'y', '1', 'tick', 'checked', 'complete', 'completed'].includes(key) || String(value ?? '').includes('✓') || String(value ?? '').includes('☑');
+}
+function isoStageRows(moduleData, stageKey, completed) {
+  const entries = moduleData?.entries || [];
+  return entries.filter((entry) => {
+    const columnIndex = entry.stageColumns?.[stageKey] ?? -1;
+    if (columnIndex < 0) return false;
+    const ticked = isIsoStageTick(entry.row?.[columnIndex]);
+    return completed ? ticked : !ticked;
+  });
+}
+function isoStageSummary(moduleData) {
+  return Object.fromEntries(ISO_STAGE_DEFINITIONS.map((stage) => [stage.key, {
+    completed: isoStageRows(moduleData, stage.key, true).length,
+    available: isoStageRows(moduleData, stage.key, false).length,
+  }]));
+}
+function combineIsoModules(modules) {
+  return { moduleName: '4193 HAMMER HEAD - ALL MODULES', entries: modules.flatMap((moduleData) => moduleData.entries || []) };
+}
+function downloadIsoEntries(entries, moduleName, label) {
+  if (!entries.length) { window.alert('No ' + label + ' rows found for ' + moduleName + '.'); return; }
+  const output = XLSX.utils.book_new();
+  const groupedSheets = new Map();
+  for (const entry of entries) {
+    if (!groupedSheets.has(entry.sheetEntry)) groupedSheets.set(entry.sheetEntry, []);
+    groupedSheets.get(entry.sheetEntry).push(entry.row);
+  }
+  const used = new Set();
+  for (const [sheetEntry, rows] of groupedSheets) {
+    const headerRowIndex = sheetEntry.header?.rowIndex ?? 0;
+    const headers = sheetEntry.rows.slice(0, headerRowIndex + 1);
+    const sheet = XLSX.utils.aoa_to_sheet([...headers, ...rows], { cellDates: true });
+    const sourceRange = sheetEntry.sheet['!ref'] ? XLSX.utils.decode_range(sheetEntry.sheet['!ref']) : null;
+    if (sourceRange) {
+      for (let r = sourceRange.s.r; r <= Math.min(headerRowIndex, sourceRange.e.r); r += 1) {
+        for (let c = sourceRange.s.c; c <= sourceRange.e.c; c += 1) {
+          const address = XLSX.utils.encode_cell({ r, c });
+          if (sheetEntry.sheet[address]?.s && sheet[address]) sheet[address].s = JSON.parse(JSON.stringify(sheetEntry.sheet[address].s));
+        }
+      }
+    }
+    if (sheetEntry.sheet['!cols']) sheet['!cols'] = sheetEntry.sheet['!cols'].map((item) => item ? { ...item } : item);
+    if (sheetEntry.sheet['!rows']) sheet['!rows'] = sheetEntry.sheet['!rows'].map((item) => item ? { ...item } : item);
+    if (sheetEntry.sheet['!merges']) sheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= headerRowIndex).map((merge) => ({ s: { ...merge.s }, e: { ...merge.e } }));
+    XLSX.utils.book_append_sheet(output, sheet, safeSheetName(sheetEntry.sheetName, used));
+  }
+  XLSX.writeFile(output, moduleName + ' ' + label + '.xlsx', { compression: true, cellStyles: true });
+}
+function downloadIsoStage(moduleData, stage, completed) {
+  const stateLabel = completed ? 'Completed' : 'Work Front Available';
+  downloadIsoEntries(isoStageRows(moduleData, stage.key, completed), moduleData.moduleName, stage.label + ' ' + stateLabel);
+}
+
+function downloadIsoMetric(moduleData, metric, label) {
+  const selected = isoMetricRows(moduleData, metric);
+  if (!selected.length) { window.alert('No ' + label + ' rows found for ' + moduleData.moduleName + '.'); return; }
+  const output = XLSX.utils.book_new();
+  const sheets = new Map();
+  for (const entry of selected) {
+    if (!sheets.has(entry.sheetEntry)) sheets.set(entry.sheetEntry, []);
+    sheets.get(entry.sheetEntry).push(entry.row);
+  }
+  const used = new Set();
+  for (const [sheetEntry, rows] of sheets) {
+    const headerRowIndex = sheetEntry.header?.rowIndex ?? 0;
+    const headers = sheetEntry.rows.slice(0, headerRowIndex + 1);
+    const sheet = XLSX.utils.aoa_to_sheet([...headers, ...rows], { cellDates: true });
+    const sourceRange = sheetEntry.sheet['!ref'] ? XLSX.utils.decode_range(sheetEntry.sheet['!ref']) : null;
+    if (sourceRange) {
+      for (let rowIndex = sourceRange.s.r; rowIndex <= Math.min(headerRowIndex, sourceRange.e.r); rowIndex += 1) {
+        for (let columnIndex = sourceRange.s.c; columnIndex <= sourceRange.e.c; columnIndex += 1) {
+          const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+          if (sheetEntry.sheet[address]?.s && sheet[address]) {
+            sheet[address].s = JSON.parse(JSON.stringify(sheetEntry.sheet[address].s));
+          }
+        }
+      }
+    }
+    if (sheetEntry.sheet['!cols']) sheet['!cols'] = sheetEntry.sheet['!cols'].map((column) => column ? { ...column } : column);
+    if (sheetEntry.sheet['!rows']) sheet['!rows'] = sheetEntry.sheet['!rows'].map((row) => row ? { ...row } : row);
+    if (sheetEntry.sheet['!merges']) {
+      sheet['!merges'] = sheetEntry.sheet['!merges']
+        .filter((merge) => merge.e.r <= headerRowIndex)
+        .map((merge) => ({ s: { ...merge.s }, e: { ...merge.e } }));
+    }
+    XLSX.utils.book_append_sheet(output, sheet, safeSheetName(sheetEntry.sheetName, used));
+  }
+  XLSX.writeFile(output, moduleData.moduleName + ' ' + label + '.xlsx', { compression: true, cellStyles: true });
+}
+
 function reportScore(entry, reportName) {
   const source = normalize(`${entry.file.name} ${entry.file.webkitRelativePath || ''} ${entry.workbook.SheetNames.join(' ')}`);
   const full = normalize(reportName);
@@ -741,10 +921,11 @@ export default function App() {
   const go = (nextPage) => { setPage(nextPage); window.scrollTo(0, 0); };
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
+  if (page === 'iso-planning-dashboard') return <IsoPlanningDashboardPage workbooks={excelSession.workbooks} back={() => go('home')} />;
   if (page === 'support-tools') return <SupportToolsPage projectLabel={supportProject.code + ' · ' + supportProject.name} open={(nextTitle) => blank(nextTitle, 'support-tools')} back={() => go('home')} />;
   if (page === 'iso-planning') return <IsoPlanningManagementPage workbooks={excelSession.workbooks} back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'iso-planning')} />;
   if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data or report has been added to this page yet.</span><button onClick={() => go(from)}>Return to Previous Page</button></div></Layout>;
-  return <Home reports={() => go('reports')} isoPlanning={() => go('iso-planning')} supportTools={(code, name) => { setSupportProject({ code, name }); go('support-tools'); }} blank={(nextTitle) => blank(nextTitle, 'home')} />;
+  return <Home isoPlanning={() => go('iso-planning-dashboard')} reports={() => go('reports')} supportTools={(code, name) => { setSupportProject({ code, name }); go('support-tools'); }} blank={(nextTitle) => blank(nextTitle, 'home')} />;
 }
 
 function Home({ reports, isoPlanning, supportTools, blank }) {
@@ -1117,11 +1298,40 @@ function IsoPlanningManagementPage({ workbooks, back, open }) {
       <aside>
         <header><p>PROJECT MODULES</p><h2>Module List</h2></header>
         <label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label>
-        <section>{filteredModules.map((moduleName) => <button key={moduleName} onClick={() => open('ISO Planning and Management · ' + moduleName)}>{moduleName}</button>)}</section>
+        <section>{filteredModules.map((moduleName) => <button key={moduleName} onClick={() => window.scrollTo(0, 0)}>{moduleName}</button>)}</section>
       </aside>
       <article className="reports">
         <div className="empty"><b>RGT</b><p>ISO PLANNING AND MANAGEMENT</p><h2>{modules.length ? 'Select a module' : 'ISO module data is not loaded'}</h2><span>{modules.length ? 'Select a module on the left to continue.' : 'Connect the Excel folder once from Reports and Status. ISO modules are read only from 4193_HH_Isometrics Control Sheet-Piping_OFSI.'}</span></div>
       </article>
+    </div>
+  </Layout>;
+}
+
+function IsoPlanningDashboardPage({ workbooks, back }) {
+  const [selectedModule, setSelectedModule] = useState(null);
+  const [query, setQuery] = useState('');
+  const [consoleMode, setConsoleMode] = useState(false);
+  const modules = useMemo(() => buildIsoPlanningData(workbooks), [workbooks]);
+  const visibleModules = useMemo(() => modules.filter((item) => item.moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
+  const moduleSelection = modules.find((item) => normalize(item.moduleName) === normalize(selectedModule)) || null;
+  const projectConsole = useMemo(() => combineIsoModules(modules), [modules]);
+  const selected = consoleMode ? projectConsole : moduleSelection;
+  const total = isoMetricRows(selected, 'total').length;
+  const issued = isoMetricRows(selected, 'issued').length;
+  const revision = isoMetricRows(selected, 'revision').length;
+  const hold = isoMetricRows(selected, 'hold').length;
+  const balance = Math.max(0, total - issued - hold);
+  const issuedPercent = total ? Math.round((issued / total) * 100) : 0;
+  const revisionRatio = revision ? (total / revision).toFixed(2) : '0';
+  const stageSummary = isoStageSummary(selected);
+  const chooseModule = (moduleName) => { setSelectedModule(moduleName); setConsoleMode(false); };
+  return <Layout title="ISO Planning and Management" sub="Project 4193 · HAMMER HEAD" back={back}>
+    <style>{`
+      .iso-plan-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px}.iso-plan-modules,.iso-console{border:1px solid #d9e7f1;background:linear-gradient(180deg,#fff,#fafdff);box-shadow:0 18px 45px rgba(16,47,74,.11)}.iso-plan-modules{padding:20px;border-radius:20px}.iso-plan-side-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.iso-console-button{padding:10px 15px;border:0;border-radius:10px;background:linear-gradient(135deg,#173f61,#2498cb);color:#fff;font-weight:900;cursor:pointer}.iso-plan-modules input{box-sizing:border-box;width:100%;margin-top:12px;padding:11px 13px;border:1px solid #bfd2e1;border-radius:10px;outline:none}.iso-plan-modules section{display:grid;gap:8px;margin-top:14px;max-height:640px;overflow:auto}.iso-plan-modules section button,.iso-metric{border:0;border-radius:11px;background:linear-gradient(135deg,#2498cb,#1875aa);color:#fff;font-weight:800;cursor:pointer}.iso-plan-modules section button{padding:13px;text-align:left}.iso-plan-modules section button.sel{background:linear-gradient(135deg,#f28a3b,#df642a)}.iso-console{padding:25px;border-radius:22px;overflow:hidden}.iso-console-head{display:flex;align-items:center;justify-content:space-between;gap:28px;flex-wrap:wrap}.iso-console-eyebrow{margin:0;color:#1686bc;font-size:12px;font-weight:900;letter-spacing:.14em}.iso-console-title{margin:6px 0 0;color:#122943;font-size:30px}.iso-progress{width:160px;height:160px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#09be68 calc(var(--p)*1%),#dceaf5 0);position:relative;box-shadow:0 10px 28px rgba(13,157,91,.18)}.iso-progress:after{content:'';position:absolute;inset:16px;border-radius:50%;background:#fff}.iso-progress-content{position:relative;z-index:1;text-align:center}.iso-progress-content b{display:block;font-size:30px;color:#112944}.iso-progress-content span{font-size:12px;color:#35516b}.iso-metrics{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-top:25px}.iso-metric{padding:15px;text-align:left;min-height:94px}.iso-metric span{display:block;font-size:12px;letter-spacing:.04em}.iso-metric b{display:block;margin-top:8px;font-size:28px}.iso-stage-card{margin-top:24px;border:1px solid #d4e3ee;border-radius:17px;overflow:auto;background:#fff}.iso-stage-heading{padding:11px 16px;background:#173f61;color:#fff;font-size:13px;font-weight:900;letter-spacing:.12em;text-align:center}.iso-stage-table{width:100%;min-width:980px;border-collapse:collapse}.iso-stage-table th,.iso-stage-table td{padding:10px 8px;border:1px solid #d4e3ee;text-align:center}.iso-stage-table th{background:#dceaf5;color:#163651;font-size:11px}.iso-stage-row-label{min-width:150px!important;background:#f3f8fc!important;font-weight:900!important;color:#173f61!important}.iso-stage-count{border:0;background:transparent;color:#126e9d;font-size:16px;font-weight:900;cursor:pointer}.iso-stage-count:hover{text-decoration:underline}.iso-empty{padding:80px 20px;text-align:center;color:#64748b}@media(max-width:1050px){.iso-plan-layout{grid-template-columns:1fr}.iso-metrics{grid-template-columns:repeat(2,1fr)}}
+    `}</style>
+    <div className="iso-plan-layout">
+      <aside className="iso-plan-modules"><div className="iso-plan-side-head"><h2>Module List</h2><button className="iso-console-button" onClick={() => { setConsoleMode(true); setSelectedModule(null); }}>CONSOLE</button></div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/><section>{visibleModules.map((item) => <button className={!consoleMode && selectedModule === item.moduleName ? 'sel' : ''} key={item.moduleName} onClick={() => chooseModule(item.moduleName)}>{item.moduleName}</button>)}</section></aside>
+      <section className="iso-console">{selected && selected.entries.length ? <><div className="iso-console-head"><div><p className="iso-console-eyebrow">{consoleMode ? 'PROJECT CONSOLE · ALL MODULES' : 'SELECTED MODULE'}</p><h2 className="iso-console-title">{selected.moduleName}</h2></div><div className="iso-progress" style={{ '--p': issuedPercent }}><div className="iso-progress-content"><b>{issuedPercent}%</b><span>Revision ratio {revisionRatio}</span></div></div></div><div className="iso-metrics"><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'total','Total Isos')}><span>TOTAL ISOS</span><b>{total}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'issued','Issued')}><span>ISSUED</span><b>{issued}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'revision','Revision')}><span>REVISION</span><b>{revision}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'hold','Hold')}><span>HOLD</span><b>{hold}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'balance','Balance Hold Free')}><span>BALANCE HOLD FREE</span><b>{balance}</b></button></div><div className="iso-stage-card"><div className="iso-stage-heading">ISO PROGRESS CONTROL</div><table className="iso-stage-table"><thead><tr><th>STATUS</th>{ISO_STAGE_DEFINITIONS.map((stage) => <th key={stage.key}>{stage.label}</th>)}</tr></thead><tbody><tr><th className="iso-stage-row-label">COMPLETED</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, true)}>{stageSummary[stage.key]?.completed || 0}</button></td>)}</tr><tr><th className="iso-stage-row-label">WORK FRONT AVAILABLE</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, false)}>{stageSummary[stage.key]?.available || 0}</button></td>)}</tr></tbody></table></div></> : <div className="iso-empty"><h2>{modules.length ? 'Select a module or open Console' : 'ISO Excel data not found'}</h2><span>{modules.length ? 'Module view shows module-wise counts. Console shows the complete project.' : 'Connect the folder containing ' + ISO_FILE_PREFIX + ' from Reports and Status.'}</span></div>}</section>
     </div>
   </Layout>;
 }
