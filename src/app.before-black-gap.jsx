@@ -133,6 +133,17 @@ const ISO_PIPE_ALIASES = ['pipe name', 'pipename'];
 const ISO_REVISION_ALIASES = ['latest revision', 'latestrevision'];
 const ISO_DOCUMENTUM_ALIASES = ['documentum cp status', 'documentumcpstatus'];
 const ISO_HOLD_ALIASES = ['hold', 'hold status', 'iso hold', 'on hold'];
+const ISO_STAGE_DEFINITIONS = [
+  { key: 'isoExtraction', label: 'ISO EXTRACTION', aliases: ['iso extraction', 'isoextraction'] },
+  { key: 'layoutCheck', label: 'LAYOUT CHECK', aliases: ['layout check', 'layoutcheck'] },
+  { key: 'stressCheck', label: 'STRESS CHECK', aliases: ['stress check', 'stresscheck'] },
+  { key: 'supportCheck', label: 'SUPPORT CHECK', aliases: ['support check', 'supportcheck'] },
+  { key: 'backDraft', label: 'BACK DRAFT', aliases: ['back draft', 'backdraft'] },
+  { key: 'backCheck', label: 'BACK CHECK', aliases: ['back check', 'backcheck'] },
+  { key: 'qcCheck', label: 'QC CHECK', aliases: ['qc check', 'qccheck'] },
+  { key: 'moduleEngineerCheck', label: 'MODULE ENGINEER CHECK', aliases: ['module engineer check', 'moduleengineercheck'] },
+  { key: 'toCp', label: 'TO CP', aliases: ['to cp', 'tocp'] },
+];
 
 function isoModuleFromPipeName(value) {
   const text = String(value ?? '').trim().replace(/^\/+/, '');
@@ -166,6 +177,7 @@ function buildIsoPlanningData(workbooks) {
       let issuedColumn = -1;
       let revisionColumn = -1;
       let holdColumn = -1;
+      let stageColumns = {};
       for (let rowIndex = 0; rowIndex < Math.min(sheetEntry.rows.length, 60); rowIndex += 1) {
         const row = sheetEntry.rows[rowIndex] ?? [];
         const foundPipe = findColumnByAliases(row, ISO_PIPE_ALIASES);
@@ -176,6 +188,7 @@ function buildIsoPlanningData(workbooks) {
         issuedColumn = findColumnByAliases(row, ISO_DOCUMENTUM_ALIASES);
         revisionColumn = findColumnByAliases(row, ISO_REVISION_ALIASES);
         holdColumn = findColumnByAliases(row, ISO_HOLD_ALIASES);
+        stageColumns = Object.fromEntries(ISO_STAGE_DEFINITIONS.map((stage) => [stage.key, findColumnByAliases(row, stage.aliases)]));
         break;
       }
       if (headerRowIndex < 0) continue;
@@ -186,7 +199,7 @@ function buildIsoPlanningData(workbooks) {
         if (!moduleName) continue;
         const key = normalize(moduleName);
         if (!moduleRows.has(key)) moduleRows.set(key, { moduleName, entries: [] });
-        moduleRows.get(key).entries.push({ row, sheetEntry, pipeColumn, issuedColumn, revisionColumn, holdColumn });
+        moduleRows.get(key).entries.push({ row, sheetEntry, pipeColumn, issuedColumn, revisionColumn, holdColumn, stageColumns });
       }
     }
   }
@@ -201,6 +214,63 @@ function isoMetricRows(moduleData, metric) {
   if (metric === 'balance') return entries.filter((entry) => !(entry.issuedColumn >= 0 && isExcelDateValue(entry.row?.[entry.issuedColumn])) && !(entry.holdColumn >= 0 && isHoldValue(entry.row?.[entry.holdColumn])));
   return [];
 }
+function isIsoStageTick(value) {
+  if (value === true || value === 1) return true;
+  const key = normalize(value);
+  return ['true', 'yes', 'y', '1', 'tick', 'checked', 'complete', 'completed'].includes(key) || String(value ?? '').includes('✓') || String(value ?? '').includes('☑');
+}
+function isoStageRows(moduleData, stageKey, completed) {
+  const entries = moduleData?.entries || [];
+  return entries.filter((entry) => {
+    const columnIndex = entry.stageColumns?.[stageKey] ?? -1;
+    if (columnIndex < 0) return false;
+    const ticked = isIsoStageTick(entry.row?.[columnIndex]);
+    return completed ? ticked : !ticked;
+  });
+}
+function isoStageSummary(moduleData) {
+  return Object.fromEntries(ISO_STAGE_DEFINITIONS.map((stage) => [stage.key, {
+    completed: isoStageRows(moduleData, stage.key, true).length,
+    available: isoStageRows(moduleData, stage.key, false).length,
+  }]));
+}
+function combineIsoModules(modules) {
+  return { moduleName: '4193 HAMMER HEAD - ALL MODULES', entries: modules.flatMap((moduleData) => moduleData.entries || []) };
+}
+function downloadIsoEntries(entries, moduleName, label) {
+  if (!entries.length) { window.alert('No ' + label + ' rows found for ' + moduleName + '.'); return; }
+  const output = XLSX.utils.book_new();
+  const groupedSheets = new Map();
+  for (const entry of entries) {
+    if (!groupedSheets.has(entry.sheetEntry)) groupedSheets.set(entry.sheetEntry, []);
+    groupedSheets.get(entry.sheetEntry).push(entry.row);
+  }
+  const used = new Set();
+  for (const [sheetEntry, rows] of groupedSheets) {
+    const headerRowIndex = sheetEntry.header?.rowIndex ?? 0;
+    const headers = sheetEntry.rows.slice(0, headerRowIndex + 1);
+    const sheet = XLSX.utils.aoa_to_sheet([...headers, ...rows], { cellDates: true });
+    const sourceRange = sheetEntry.sheet['!ref'] ? XLSX.utils.decode_range(sheetEntry.sheet['!ref']) : null;
+    if (sourceRange) {
+      for (let r = sourceRange.s.r; r <= Math.min(headerRowIndex, sourceRange.e.r); r += 1) {
+        for (let c = sourceRange.s.c; c <= sourceRange.e.c; c += 1) {
+          const address = XLSX.utils.encode_cell({ r, c });
+          if (sheetEntry.sheet[address]?.s && sheet[address]) sheet[address].s = JSON.parse(JSON.stringify(sheetEntry.sheet[address].s));
+        }
+      }
+    }
+    if (sheetEntry.sheet['!cols']) sheet['!cols'] = sheetEntry.sheet['!cols'].map((item) => item ? { ...item } : item);
+    if (sheetEntry.sheet['!rows']) sheet['!rows'] = sheetEntry.sheet['!rows'].map((item) => item ? { ...item } : item);
+    if (sheetEntry.sheet['!merges']) sheet['!merges'] = sheetEntry.sheet['!merges'].filter((merge) => merge.e.r <= headerRowIndex).map((merge) => ({ s: { ...merge.s }, e: { ...merge.e } }));
+    XLSX.utils.book_append_sheet(output, sheet, safeSheetName(sheetEntry.sheetName, used));
+  }
+  XLSX.writeFile(output, moduleName + ' ' + label + '.xlsx', { compression: true, cellStyles: true });
+}
+function downloadIsoStage(moduleData, stage, completed) {
+  const stateLabel = completed ? 'Completed' : 'Work Front Available';
+  downloadIsoEntries(isoStageRows(moduleData, stage.key, completed), moduleData.moduleName, stage.label + ' ' + stateLabel);
+}
+
 function downloadIsoMetric(moduleData, metric, label) {
   const selected = isoMetricRows(moduleData, metric);
   if (!selected.length) { window.alert('No ' + label + ' rows found for ' + moduleData.moduleName + '.'); return; }
@@ -1240,9 +1310,15 @@ function IsoPlanningManagementPage({ workbooks, back, open }) {
 function IsoPlanningDashboardPage({ workbooks, back }) {
   const [selectedModule, setSelectedModule] = useState(null);
   const [query, setQuery] = useState('');
+  const [consoleMode, setConsoleMode] = useState(false);
+  const [blankToolPage, setBlankToolPage] = useState(null);
+  const metricsRef = useRef(null);
+  const progressRef = useRef(null);
   const modules = useMemo(() => buildIsoPlanningData(workbooks), [workbooks]);
   const visibleModules = useMemo(() => modules.filter((item) => item.moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
-  const selected = modules.find((item) => normalize(item.moduleName) === normalize(selectedModule)) || null;
+  const moduleSelection = modules.find((item) => normalize(item.moduleName) === normalize(selectedModule)) || null;
+  const projectConsole = useMemo(() => combineIsoModules(modules), [modules]);
+  const selected = consoleMode ? projectConsole : moduleSelection;
   const total = isoMetricRows(selected, 'total').length;
   const issued = isoMetricRows(selected, 'issued').length;
   const revision = isoMetricRows(selected, 'revision').length;
@@ -1250,13 +1326,42 @@ function IsoPlanningDashboardPage({ workbooks, back }) {
   const balance = Math.max(0, total - issued - hold);
   const issuedPercent = total ? Math.round((issued / total) * 100) : 0;
   const revisionRatio = revision ? (total / revision).toFixed(2) : '0';
+  const stageSummary = isoStageSummary(selected);
+  const chooseModule = (moduleName) => { setSelectedModule(moduleName); setConsoleMode(false); };
+  const openPlanning = () => {
+    setBlankToolPage(null);
+    setConsoleMode(false);
+    window.setTimeout(() => metricsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
+  const openConsole = () => {
+    setBlankToolPage(null);
+    setConsoleMode(true);
+    setSelectedModule(null);
+    window.setTimeout(() => metricsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
+  const openAnalytics = () => setBlankToolPage('ANALYTICS');
+  const openRevision = () => setBlankToolPage('REVISION');
+  if (blankToolPage) {
+    return <Layout title={blankToolPage} sub="ISO Planning and Management · Project 4193" back={() => setBlankToolPage(null)}>
+      <style>{`
+        .iso-tool-blank{min-height:560px;display:grid;place-items:center;padding:32px;background:linear-gradient(180deg,#f5faff,#ebf3f9)}.iso-tool-blank-card{width:min(720px,100%);padding:70px 30px;border:1px solid #d8e6f0;border-radius:24px;background:#fff;box-shadow:0 20px 55px rgba(16,47,74,.12);text-align:center}.iso-tool-blank-mark{width:72px;height:72px;margin:0 auto 20px;display:grid;place-items:center;border-radius:20px;background:linear-gradient(135deg,#173f61,#2498cb);color:#fff;font-size:22px;font-weight:900;letter-spacing:.08em}.iso-tool-blank-card p{margin:0;color:#1686bc;font-size:12px;font-weight:900;letter-spacing:.16em}.iso-tool-blank-card h2{margin:10px 0 8px;color:#122943;font-size:32px}.iso-tool-blank-card span{color:#70869a;font-size:14px}
+      `}</style>
+      <section className="iso-tool-blank"><div className="iso-tool-blank-card"><div className="iso-tool-blank-mark">RGT</div><p>ISO PLANNING AND MANAGEMENT</p><h2>{blankToolPage}</h2><span>Content will be added later.</span></div></section>
+    </Layout>;
+  }
   return <Layout title="ISO Planning and Management" sub="Project 4193 · HAMMER HEAD" back={back}>
     <style>{`
-      .iso-plan-layout{display:grid;grid-template-columns:300px 1fr;gap:24px}.iso-plan-modules{padding:20px;border-radius:18px;background:#fff;box-shadow:0 12px 30px rgba(23,50,77,.1)}.iso-plan-modules input{box-sizing:border-box;width:100%;padding:11px;border:1px solid #bfd2e1;border-radius:10px}.iso-plan-modules section{display:grid;gap:8px;margin-top:14px;max-height:620px;overflow:auto}.iso-plan-modules button,.iso-metric{border:0;border-radius:11px;background:#2498cb;color:#fff;font-weight:800;cursor:pointer}.iso-plan-modules button{padding:13px;text-align:left}.iso-plan-modules button.sel{background:#ef7b34}.iso-console{padding:24px;border-radius:20px;background:#fff;box-shadow:0 12px 30px rgba(23,50,77,.1)}.iso-console-head{display:flex;align-items:center;gap:28px;flex-wrap:wrap}.iso-progress{width:150px;height:150px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#0dbb63 calc(var(--p)*1%),#dceaf5 0);position:relative}.iso-progress:after{content:'';position:absolute;inset:15px;border-radius:50%;background:#fff}.iso-progress-content{position:relative;z-index:1;text-align:center}.iso-progress-content b{display:block;font-size:28px}.iso-progress-content span{font-size:12px}.iso-metrics{display:grid;grid-template-columns:repeat(5,minmax(125px,1fr));gap:12px;margin-top:25px}.iso-metric{padding:15px;text-align:left;min-height:90px}.iso-metric span{display:block;font-size:13px}.iso-metric b{display:block;margin-top:8px;font-size:26px}.iso-empty{padding:70px 20px;text-align:center;color:#64748b}@media(max-width:900px){.iso-plan-layout{grid-template-columns:1fr}.iso-metrics{grid-template-columns:repeat(2,1fr)}}
+      .iso-plan-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px}.iso-plan-modules,.iso-console{border:1px solid #d9e7f1;background:linear-gradient(180deg,#fff,#fafdff);box-shadow:0 18px 45px rgba(16,47,74,.11)}.iso-plan-modules{padding:20px;border-radius:20px}.iso-plan-side-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.iso-top-actions{display:flex;justify-content:flex-end;align-items:center;gap:14px;margin:0 0 34px;flex-wrap:wrap}.iso-top-action{min-width:142px;padding:14px 20px;border:1px solid rgba(255,255,255,.8);border-radius:13px;background:linear-gradient(135deg,#2498cb,#176f9f);color:#fff;font-size:13px;font-weight:900;letter-spacing:.06em;cursor:pointer;box-shadow:0 9px 22px rgba(23,117,170,.22);transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}.iso-top-action:hover{transform:translateY(-2px);box-shadow:0 13px 27px rgba(23,117,170,.3);filter:brightness(1.04)}.iso-top-action.active{background:linear-gradient(135deg,#173f61,#0f2f49);box-shadow:0 11px 25px rgba(15,47,73,.28)}.iso-top-action:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}.iso-plan-modules input{box-sizing:border-box;width:100%;margin-top:12px;padding:11px 13px;border:1px solid #bfd2e1;border-radius:10px;outline:none}.iso-plan-modules section{display:grid;gap:8px;margin-top:14px;max-height:640px;overflow:auto}.iso-plan-modules section button,.iso-metric{border:0;border-radius:11px;background:linear-gradient(135deg,#2498cb,#1875aa);color:#fff;font-weight:800;cursor:pointer}.iso-plan-modules section button{padding:13px;text-align:left}.iso-plan-modules section button.sel{background:linear-gradient(135deg,#f28a3b,#df642a)}.iso-console{padding:25px;border-radius:22px;overflow:hidden}.iso-console-head{display:flex;align-items:center;justify-content:space-between;gap:28px;flex-wrap:wrap}.iso-console-eyebrow{margin:0;color:#1686bc;font-size:12px;font-weight:900;letter-spacing:.14em}.iso-console-title{margin:6px 0 0;color:#122943;font-size:30px}.iso-progress{width:160px;height:160px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#09be68 calc(var(--p)*1%),#dceaf5 0);position:relative;box-shadow:0 10px 28px rgba(13,157,91,.18)}.iso-progress:after{content:'';position:absolute;inset:16px;border-radius:50%;background:#fff}.iso-progress-content{position:relative;z-index:1;text-align:center}.iso-progress-content b{display:block;font-size:30px;color:#112944}.iso-progress-content span{font-size:12px;color:#35516b}.iso-metrics{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-top:25px}.iso-metric{padding:15px;text-align:left;min-height:94px}.iso-metric span{display:block;font-size:12px;letter-spacing:.04em}.iso-metric b{display:block;margin-top:8px;font-size:28px}.iso-stage-card{margin-top:52px;border:1px solid #d4e3ee;border-radius:17px;overflow:auto;background:#fff}.iso-stage-heading{padding:11px 16px;background:#173f61;color:#fff;font-size:13px;font-weight:900;letter-spacing:.12em;text-align:center}.iso-stage-table{width:100%;min-width:980px;border-collapse:collapse}.iso-stage-table tbody tr+tr th,.iso-stage-table tbody tr+tr td{border-top:18px solid #f4f8fb}.iso-stage-table tbody tr+tr th:first-child{border-top-left-radius:8px}.iso-stage-table tbody tr+tr td:last-child{border-top-right-radius:8px}.iso-stage-table th,.iso-stage-table td{padding:10px 8px;border:1px solid #d4e3ee;text-align:center}.iso-stage-table th{background:#dceaf5;color:#163651;font-size:11px}.iso-stage-row-label{min-width:150px!important;background:#f3f8fc!important;font-weight:900!important;color:#173f61!important}.iso-stage-count{border:0;background:transparent;color:#126e9d;font-size:16px;font-weight:900;cursor:pointer}.iso-stage-count:hover{text-decoration:underline}.iso-empty{padding:80px 20px;text-align:center;color:#64748b}@media(max-width:1050px){.iso-plan-layout{grid-template-columns:1fr}.iso-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:1050px){.iso-top-actions{justify-content:flex-start}.iso-top-action{min-width:124px}}@media(max-width:640px){.iso-top-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.iso-top-action{width:100%;min-width:0;padding:12px 10px}}
     `}</style>
     <div className="iso-plan-layout">
-      <aside className="iso-plan-modules"><h2>Module List</h2><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/><section>{visibleModules.map((item) => <button className={selectedModule === item.moduleName ? 'sel' : ''} key={item.moduleName} onClick={() => setSelectedModule(item.moduleName)}>{item.moduleName}</button>)}</section></aside>
-      <section className="iso-console">{selected ? <><div className="iso-console-head"><div><p>SELECTED MODULE</p><h2>{selected.moduleName}</h2></div><div className="iso-progress" style={{ '--p': issuedPercent }}><div className="iso-progress-content"><b>{issuedPercent}%</b><span>Revision ratio {revisionRatio}</span></div></div></div><div className="iso-metrics"><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'total','Total Isos')}><span>TOTAL ISOS</span><b>{total}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'issued','Issued')}><span>ISSUED</span><b>{issued}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'revision','Revision')}><span>REVISION</span><b>{revision}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'hold','Hold')}><span>HOLD</span><b>{hold}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'balance','Balance Hold Free')}><span>BALANCE HOLD FREE</span><b>{balance}</b></button></div></> : <div className="iso-empty"><h2>{modules.length ? 'Select a module' : 'ISO Excel data not found'}</h2><span>{modules.length ? 'Select a module to view automatic ISO metrics.' : 'Connect the folder containing ' + ISO_FILE_PREFIX + ' from Reports and Status.'}</span></div>}</section>
+      <aside className="iso-plan-modules"><div className="iso-plan-side-head"><h2>Module List</h2></div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/><section>{visibleModules.map((item) => <button className={!consoleMode && selectedModule === item.moduleName ? 'sel' : ''} key={item.moduleName} onClick={() => chooseModule(item.moduleName)}>{item.moduleName}</button>)}</section></aside>
+      <section className="iso-console" ref={metricsRef}>
+      <div className="iso-top-actions">
+        <button className={'iso-top-action ' + (!consoleMode ? 'active' : '')} onClick={openPlanning}>PLANNING</button>
+        <button className={'iso-top-action ' + (consoleMode ? 'active' : '')} onClick={openConsole}>CONSOLE</button>
+        <button className="iso-top-action" onClick={openAnalytics}>ANALYTICS</button>
+        <button className="iso-top-action" onClick={openRevision}>REVISION</button>
+      </div>{selected && selected.entries.length ? <><div className="iso-console-head"><div><p className="iso-console-eyebrow">{consoleMode ? 'PROJECT CONSOLE · ALL MODULES' : 'SELECTED MODULE'}</p><h2 className="iso-console-title">{selected.moduleName}</h2></div><div className="iso-progress" style={{ '--p': issuedPercent }}><div className="iso-progress-content"><b>{issuedPercent}%</b><span>Revision ratio {revisionRatio}</span></div></div></div><div className="iso-metrics"><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'total','Total Isos')}><span>TOTAL ISOS</span><b>{total}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'issued','Issued')}><span>ISSUED</span><b>{issued}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'revision','Revision')}><span>REVISION</span><b>{revision}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'hold','Hold')}><span>HOLD</span><b>{hold}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'balance','Balance Hold Free')}><span>BALANCE HOLD FREE</span><b>{balance}</b></button></div><div className="iso-stage-card" ref={progressRef}><div className="iso-stage-heading">ISO PROGRESS CONTROL</div><table className="iso-stage-table"><thead><tr><th>STATUS</th>{ISO_STAGE_DEFINITIONS.map((stage) => <th key={stage.key}>{stage.label}</th>)}</tr></thead><tbody><tr><th className="iso-stage-row-label">COMPLETED</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, true)}>{stageSummary[stage.key]?.completed || 0}</button></td>)}</tr><tr><th className="iso-stage-row-label">WORK FRONT AVAILABLE</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, false)}>{stageSummary[stage.key]?.available || 0}</button></td>)}</tr></tbody></table></div></> : <div className="iso-empty"><h2>{modules.length ? 'Select a module or open Console' : 'ISO Excel data not found'}</h2><span>{modules.length ? 'Module view shows module-wise counts. Console shows the complete project.' : 'Connect the folder containing ' + ISO_FILE_PREFIX + ' from Reports and Status.'}</span></div>}</section>
     </div>
   </Layout>;
 }
