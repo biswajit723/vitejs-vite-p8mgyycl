@@ -813,7 +813,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
     };
   }, [setExcelSession]);
   const list = useMemo(() => modules
-    .filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase()))
+    .filter((moduleName) => normalize(moduleName) !== 'grandtotal' && moduleName.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
   const fluidCodeStatus = useMemo(() => getFluidCodeStatus(workbooks, selected), [workbooks, selected]);
