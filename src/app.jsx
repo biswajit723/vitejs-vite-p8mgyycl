@@ -96,6 +96,38 @@ async function parseWorkbooksFast(files, onProgress) {
   return results;
 }
 
+function isIsoPlanningWorkbook(entry) {
+  const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
+  return normalize(fileNameWithoutExtension).startsWith(normalize('4193_HH_Isometrics Control Sheet-Piping_OFSI'));
+}
+
+function getIsoPlanningModules(workbooks) {
+  const modules = new Map();
+  for (const workbookEntry of workbooks) {
+    if (!isIsoPlanningWorkbook(workbookEntry)) continue;
+    for (const sheetEntry of workbookEntry.sheets) {
+      let headerRowIndex = -1;
+      let moduleColumn = -1;
+      for (let rowIndex = 0; rowIndex < Math.min(sheetEntry.rows.length, 40); rowIndex += 1) {
+        const row = sheetEntry.rows[rowIndex] ?? [];
+        const foundModuleColumn = row.findIndex(isModuleHeader);
+        if (foundModuleColumn >= 0) {
+          headerRowIndex = rowIndex;
+          moduleColumn = foundModuleColumn;
+          break;
+        }
+      }
+      if (headerRowIndex < 0) continue;
+      for (const row of sheetEntry.rows.slice(headerRowIndex + 1)) {
+        const rawModule = String(row?.[moduleColumn] ?? '').trim();
+        const key = normalize(rawModule);
+        if (key && !modules.has(key)) modules.set(key, rawModule);
+      }
+    }
+  }
+  return [...modules.values()];
+}
+
 function reportScore(entry, reportName) {
   const source = normalize(`${entry.file.name} ${entry.file.webkitRelativePath || ''} ${entry.workbook.SheetNames.join(' ')}`);
   const full = normalize(reportName);
@@ -142,6 +174,10 @@ function isNamedReportWorkbook(entry, expectedName) {
   const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
   const nameWithoutTrailingNumbers = fileNameWithoutExtension.replace(/[_\s-]*\d+$/, '');
   return normalize(nameWithoutTrailingNumbers) === normalize(expectedName);
+}
+function isPipeMtoModuleWorkbook(entry) {
+  const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
+  return normalize(fileNameWithoutExtension).startsWith(normalize('EHH_PIPE_MTO_REPORT'));
 }
 function mtoWorkbookCandidates(workbooks) {
   const mtoOnlyWorkbooks = workbooks.filter((entry) =>
@@ -704,12 +740,17 @@ export default function App() {
   const go = (nextPage) => { setPage(nextPage); window.scrollTo(0, 0); };
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
+  if (page === 'iso-planning') return <IsoPlanningManagementPage workbooks={excelSession.workbooks} back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'iso-planning')} />;
   if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data or report has been added to this page yet.</span><button onClick={() => go(from)}>Return to Previous Page</button></div></Layout>;
-  return <Home reports={() => go('reports')} blank={(nextTitle) => blank(nextTitle, 'home')} />;
+  return <Home reports={() => go('reports')} isoPlanning={() => go('iso-planning')} blank={(nextTitle) => blank(nextTitle, 'home')} />;
 }
 
-function Home({ reports, blank }) {
-  const action = (code, name, actionName) => code === '4193' && actionName === 'Reports and Status' ? reports() : blank(`${code} · ${name} · ${actionName}`);
+function Home({ reports, isoPlanning, blank }) {
+  const action = (code, name, actionName) => {
+    if (code === '4193' && actionName === 'Reports and Status') return reports();
+    if (code === '4193' && actionName === 'ISO Planning and Management') return isoPlanning();
+    return blank(`${code} · ${name} · ${actionName}`);
+  };
   return <><section className="hero"><div/><main><p>FPSO PROJECT PORTAL</p><h1>Reports Generate Tools</h1></main></section><section className="dashboard"><div className="projects"><Card code="4193" name="HAMMER HEAD" click={(item) => action('4193', 'HAMMER HEAD', item)}/><Card code="4173" name="Gato do Mato" click={(item) => action('4173', 'Gato do Mato', item)}/></div></section></>;
 }
 
@@ -771,7 +812,9 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       window.clearInterval(intervalId);
     };
   }, [setExcelSession]);
-  const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
+  const list = useMemo(() => modules
+    .filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
   const fluidCodeStatus = useMemo(() => getFluidCodeStatus(workbooks, selected), [workbooks, selected]);
   const fluidCodeGrandTotal = useMemo(() => fluidCodeStatus.fluidCodes.reduce((total, fluidCode) => total + fluidCodeStatus.sizes.reduce((sum, size) => sum + (fluidCodeStatus.counts[fluidCode]?.[size] || 0), 0), 0), [fluidCodeStatus]);
@@ -790,6 +833,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       });
       const moduleMap = new Map();
       for (const workbookEntry of parsed) {
+        if (!isPipeMtoModuleWorkbook(workbookEntry)) continue;
         for (const sheetEntry of workbookEntry.sheets) {
           if (!sheetEntry.header) continue;
           for (const row of sheetEntry.rows.slice(sheetEntry.header.rowIndex + 1)) {
@@ -807,7 +851,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       cacheModules(dynamicModules);
       setSelected((current) => dynamicModules.some((item) => normalize(item) === normalize(current)) ? current : null);
       if (!dynamicModules.length) {
-        showNotice('warning', 'Folder connected', 'No Module or Module Name column was found in the connected Excel files.');
+        showNotice('warning', 'Folder connected', 'No Module or Module Name column was found in EHH_PIPE_MTO_REPORT.');
         return;
       }
 
@@ -1058,6 +1102,25 @@ function SupportToolsPage({ moduleName, open, back }) {
       </div>
     </section>
   </main>;
+}
+
+function IsoPlanningManagementPage({ workbooks, back, open }) {
+  const [query, setQuery] = useState('');
+  const modules = useMemo(() => getIsoPlanningModules(workbooks)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })), [workbooks]);
+  const filteredModules = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
+  return <Layout title="ISO Planning and Management" sub="Project 4193 · HAMMER HEAD" back={back}>
+    <div className="work">
+      <aside>
+        <header><p>PROJECT MODULES</p><h2>Module List</h2></header>
+        <label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label>
+        <section>{filteredModules.map((moduleName) => <button key={moduleName} onClick={() => open('ISO Planning and Management · ' + moduleName)}>{moduleName}</button>)}</section>
+      </aside>
+      <article className="reports">
+        <div className="empty"><b>RGT</b><p>ISO PLANNING AND MANAGEMENT</p><h2>{modules.length ? 'Select a module' : 'ISO module data is not loaded'}</h2><span>{modules.length ? 'Select a module on the left to continue.' : 'Connect the Excel folder once from Reports and Status. ISO modules are read only from 4193_HH_Isometrics Control Sheet-Piping_OFSI.'}</span></div>
+      </article>
+    </div>
+  </Layout>;
 }
 
 function Integrated({ open }) {
