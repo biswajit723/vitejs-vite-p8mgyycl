@@ -133,6 +133,7 @@ const ISO_PIPE_ALIASES = ['pipe name', 'pipename'];
 const ISO_REVISION_ALIASES = ['latest revision', 'latestrevision'];
 const ISO_DOCUMENTUM_ALIASES = ['documentum cp status', 'documentumcpstatus'];
 const ISO_HOLD_ALIASES = ['hold', 'hold status', 'iso hold', 'on hold'];
+const ISO_FORECAST_ALIASES = ['forecast issue date', 'forecastissuedate'];
 const ISO_STAGE_DEFINITIONS = [
   { key: 'isoExtraction', label: 'ISO EXTRACTION', aliases: ['iso extraction', 'isoextraction'] },
   { key: 'layoutCheck', label: 'LAYOUT CHECK', aliases: ['layout check', 'layoutcheck'] },
@@ -177,6 +178,7 @@ function buildIsoPlanningData(workbooks) {
       let issuedColumn = -1;
       let revisionColumn = -1;
       let holdColumn = -1;
+      let forecastColumn = -1;
       let stageColumns = {};
       for (let rowIndex = 0; rowIndex < Math.min(sheetEntry.rows.length, 60); rowIndex += 1) {
         const row = sheetEntry.rows[rowIndex] ?? [];
@@ -188,6 +190,7 @@ function buildIsoPlanningData(workbooks) {
         issuedColumn = findColumnByAliases(row, ISO_DOCUMENTUM_ALIASES);
         revisionColumn = findColumnByAliases(row, ISO_REVISION_ALIASES);
         holdColumn = findColumnByAliases(row, ISO_HOLD_ALIASES);
+        forecastColumn = findColumnByAliases(row, ISO_FORECAST_ALIASES);
         stageColumns = Object.fromEntries(ISO_STAGE_DEFINITIONS.map((stage) => [stage.key, findColumnByAliases(row, stage.aliases)]));
         break;
       }
@@ -199,12 +202,99 @@ function buildIsoPlanningData(workbooks) {
         if (!moduleName) continue;
         const key = normalize(moduleName);
         if (!moduleRows.has(key)) moduleRows.set(key, { moduleName, entries: [] });
-        moduleRows.get(key).entries.push({ row, sheetEntry, pipeColumn, issuedColumn, revisionColumn, holdColumn, stageColumns });
+        moduleRows.get(key).entries.push({ row, sheetEntry, pipeColumn, issuedColumn, revisionColumn, holdColumn, stageColumns, forecastColumn });
       }
     }
   }
   return [...moduleRows.values()].sort((a, b) => a.moduleName.localeCompare(b.moduleName, undefined, { numeric: true, sensitivity: 'base' }));
 }
+function parseIsoForecastDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  if (typeof value === 'number' && value > 1 && value < 100000) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    return parsed ? new Date(parsed.y, parsed.m - 1, parsed.d) : null;
+  }
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const direct = new Date(text);
+  if (!Number.isNaN(direct.getTime())) return new Date(direct.getFullYear(), direct.getMonth(), direct.getDate());
+  const match = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  if (!match) return null;
+  const year = Number(match[3]) < 100 ? 2000 + Number(match[3]) : Number(match[3]);
+  const parsed = new Date(year, Number(match[2]) - 1, Number(match[1]));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+function isoMonday(date) {
+  const value = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = value.getDay();
+  value.setDate(value.getDate() - (day === 0 ? 6 : day - 1));
+  return value;
+}
+function isoDateKey(date) {
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+}
+function isoShortDate(date) {
+  return date.toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+}
+function isIsoPlanningValidEntry(entry) {
+  const pipeName = String(entry.row?.[entry.pipeColumn] ?? '').trim();
+  return Boolean(pipeName) && !normalize(pipeName).includes('linedeleted');
+}
+function buildIsoFourWeekPlan(moduleData) {
+  const validEntries = (moduleData?.entries || [])
+    .filter(isIsoPlanningValidEntry)
+    .map((entry) => ({
+      entry,
+      date: entry.forecastColumn >= 0 ? parseIsoForecastDate(entry.row?.[entry.forecastColumn]) : null,
+    }))
+    .filter((item) => item.date && item.date.getDay() >= 1 && item.date.getDay() <= 5)
+    .sort((a, b) => a.date - b.date);
+
+  const weekGroups = new Map();
+  for (const item of validEntries) {
+    const monday = isoMonday(item.date);
+    const key = isoDateKey(monday);
+    if (!weekGroups.has(key)) weekGroups.set(key, { monday, rows: [] });
+    weekGroups.get(key).rows.push(item);
+  }
+
+  const availableWeeks = [...weekGroups.values()].sort((a, b) => a.monday - b.monday);
+  const selectedWeeks = availableWeeks.slice(0, 4);
+  const fallbackStart = availableWeeks[0]?.monday || isoMonday(new Date());
+  while (selectedWeeks.length < 4) {
+    const monday = new Date(fallbackStart);
+    monday.setDate(fallbackStart.getDate() + selectedWeeks.length * 7);
+    selectedWeeks.push({ monday, rows: [] });
+  }
+
+  const dayLabels = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
+  const weeks = selectedWeeks.map((group, weekIndex) => {
+    const monday = new Date(group.monday);
+    const friday = new Date(monday);
+    friday.setDate(monday.getDate() + 4);
+    const days = dayLabels.map((label, dayIndex) => {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + dayIndex);
+      const dateRows = group.rows.filter((item) => isoDateKey(item.date) === isoDateKey(date));
+      return { label, date, dateLabel: isoShortDate(date), count: dateRows.length };
+    });
+    return {
+      weekIndex,
+      label: 'W' + (weekIndex + 1),
+      range: isoShortDate(monday) + ' - ' + isoShortDate(friday),
+      rows: group.rows,
+      total: group.rows.length,
+      holds: group.rows.filter((item) => item.entry.holdColumn >= 0 && normalize(item.entry.row?.[item.entry.holdColumn]) === 'yes').length,
+      days,
+    };
+  });
+
+  return {
+    weeks,
+    maxValue: Math.max(1, ...weeks.flatMap((week) => week.days.map((day) => day.count))),
+  };
+}
+
 function isoMetricRows(moduleData, metric) {
   const entries = moduleData?.entries || [];
   if (metric === 'total') return entries;
@@ -1311,6 +1401,7 @@ function IsoPlanningDashboardPage({ workbooks, back }) {
   const [selectedModule, setSelectedModule] = useState(null);
   const [query, setQuery] = useState('');
   const [consoleMode, setConsoleMode] = useState(false);
+  const [planningMode, setPlanningMode] = useState(false);
   const [blankToolPage, setBlankToolPage] = useState(null);
   const metricsRef = useRef(null);
   const progressRef = useRef(null);
@@ -1327,13 +1418,15 @@ function IsoPlanningDashboardPage({ workbooks, back }) {
   const issuedPercent = total ? Math.round((issued / total) * 100) : 0;
   const revisionRatio = revision ? (total / revision).toFixed(2) : '0';
   const stageSummary = isoStageSummary(selected);
-  const chooseModule = (moduleName) => { setSelectedModule(moduleName); setConsoleMode(false); };
+  const fourWeekPlan = useMemo(() => buildIsoFourWeekPlan(moduleSelection), [moduleSelection]);
+  const chooseModule = (moduleName) => { setSelectedModule(moduleName); setConsoleMode(false);  setPlanningMode(false); };
   const openPlanning = () => {
-    setBlankToolPage(null);
-    setConsoleMode(false);
+    setPlanningMode(false);
+    if (typeof setBlankToolPage === 'function') setBlankToolPage(null);
     window.setTimeout(() => metricsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   };
   const openConsole = () => {
+    setPlanningMode(false);
     setBlankToolPage(null);
     setConsoleMode(true);
     setSelectedModule(null);
@@ -1351,17 +1444,21 @@ function IsoPlanningDashboardPage({ workbooks, back }) {
   }
   return <Layout title="ISO Planning and Management" sub="Project 4193 · HAMMER HEAD" back={back}>
     <style>{`
-      .iso-plan-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px}.iso-plan-modules,.iso-console{border:1px solid #d9e7f1;background:linear-gradient(180deg,#fff,#fafdff);box-shadow:0 18px 45px rgba(16,47,74,.11)}.iso-plan-modules{padding:20px;border-radius:20px}.iso-plan-side-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.iso-top-actions{display:flex;justify-content:flex-end;align-items:center;gap:14px;margin:0 0 34px;flex-wrap:wrap}.iso-top-action{min-width:142px;padding:14px 20px;border:1px solid rgba(255,255,255,.8);border-radius:13px;background:linear-gradient(135deg,#2498cb,#176f9f);color:#fff;font-size:13px;font-weight:900;letter-spacing:.06em;cursor:pointer;box-shadow:0 9px 22px rgba(23,117,170,.22);transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}.iso-top-action:hover{transform:translateY(-2px);box-shadow:0 13px 27px rgba(23,117,170,.3);filter:brightness(1.04)}.iso-top-action.active{background:linear-gradient(135deg,#173f61,#0f2f49);box-shadow:0 11px 25px rgba(15,47,73,.28)}.iso-top-action:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}.iso-plan-modules input{box-sizing:border-box;width:100%;margin-top:12px;padding:11px 13px;border:1px solid #bfd2e1;border-radius:10px;outline:none}.iso-plan-modules section{display:grid;gap:8px;margin-top:14px;max-height:640px;overflow:auto}.iso-plan-modules section button,.iso-metric{border:0;border-radius:11px;background:linear-gradient(135deg,#2498cb,#1875aa);color:#fff;font-weight:800;cursor:pointer}.iso-plan-modules section button{padding:13px;text-align:left}.iso-plan-modules section button.sel{background:linear-gradient(135deg,#f28a3b,#df642a)}.iso-console{padding:25px;border-radius:22px;overflow:hidden}.iso-console-head{display:flex;align-items:center;justify-content:space-between;gap:28px;flex-wrap:wrap}.iso-console-eyebrow{margin:0;color:#1686bc;font-size:12px;font-weight:900;letter-spacing:.14em}.iso-console-title{margin:6px 0 0;color:#122943;font-size:30px}.iso-progress{width:160px;height:160px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#09be68 calc(var(--p)*1%),#dceaf5 0);position:relative;box-shadow:0 10px 28px rgba(13,157,91,.18)}.iso-progress:after{content:'';position:absolute;inset:16px;border-radius:50%;background:#fff}.iso-progress-content{position:relative;z-index:1;text-align:center}.iso-progress-content b{display:block;font-size:30px;color:#112944}.iso-progress-content span{font-size:12px;color:#35516b}.iso-metrics{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-top:25px}.iso-metric{padding:15px;text-align:left;min-height:94px}.iso-metric span{display:block;font-size:12px;letter-spacing:.04em}.iso-metric b{display:block;margin-top:8px;font-size:28px}.iso-stage-card{margin-top:52px;border:1px solid #d4e3ee;border-radius:17px;overflow:auto;background:#fff}.iso-stage-heading{padding:11px 16px;background:#173f61;color:#fff;font-size:13px;font-weight:900;letter-spacing:.12em;text-align:center}.iso-stage-table{width:100%;min-width:980px;border-collapse:collapse}.iso-stage-table tbody tr+tr th,.iso-stage-table tbody tr+tr td{border-top:18px solid #111827}.iso-stage-table tbody tr+tr th:first-child{border-top-left-radius:8px}.iso-stage-table tbody tr+tr td:last-child{border-top-right-radius:8px}.iso-stage-table th,.iso-stage-table td{padding:10px 8px;border:1px solid #d4e3ee;text-align:center}.iso-stage-table th{background:#dceaf5;color:#163651;font-size:11px}.iso-stage-row-label{min-width:150px!important;background:#f3f8fc!important;font-weight:900!important;color:#173f61!important}.iso-stage-count{border:0;background:transparent;color:#126e9d;font-size:16px;font-weight:900;cursor:pointer}.iso-stage-count:hover{text-decoration:underline}.iso-empty{padding:80px 20px;text-align:center;color:#64748b}@media(max-width:1050px){.iso-plan-layout{grid-template-columns:1fr}.iso-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:1050px){.iso-top-actions{justify-content:flex-start}.iso-top-action{min-width:124px}}@media(max-width:640px){.iso-top-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.iso-top-action{width:100%;min-width:0;padding:12px 10px}}
+      .iso-plan-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px}.iso-plan-modules,.iso-console{border:1px solid #d9e7f1;background:linear-gradient(180deg,#fff,#fafdff);box-shadow:0 18px 45px rgba(16,47,74,.11)}.iso-plan-modules{padding:20px;border-radius:20px}.iso-plan-side-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.iso-top-actions{display:flex;justify-content:flex-end;align-items:center;gap:14px;margin:0 0 34px;flex-wrap:wrap}.iso-top-action{min-width:142px;padding:14px 20px;border:1px solid rgba(255,255,255,.8);border-radius:13px;background:linear-gradient(135deg,#2498cb,#176f9f);color:#fff;font-size:13px;font-weight:900;letter-spacing:.06em;cursor:pointer;box-shadow:0 9px 22px rgba(23,117,170,.22);transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}.iso-top-action:hover{transform:translateY(-2px);box-shadow:0 13px 27px rgba(23,117,170,.3);filter:brightness(1.04)}.iso-top-action.active{background:linear-gradient(135deg,#173f61,#0f2f49);box-shadow:0 11px 25px rgba(15,47,73,.28)}.iso-top-action:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}.iso-module-plan-below-progress{margin-top:42px}.iso-module-plan-below-progress:before{content:'MODULE-WISE PLANNING';display:block;margin:0 0 14px;color:#7dd3fc;font-size:10px;font-weight:900;letter-spacing:.16em}.iso-plan-chart-card{padding:26px;border:1px solid #d3e3ef;border-radius:20px;background:linear-gradient(145deg,#102f4a,#173f61 58%,#1b5478);box-shadow:0 20px 46px rgba(15,47,73,.24);color:#fff}.iso-plan-chart-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:24px}.iso-plan-chart-head p{margin:0;color:#7dd3fc;font-size:11px;font-weight:900;letter-spacing:.15em}.iso-plan-chart-head h2{margin:5px 0 0;font-size:28px}.iso-plan-chart-source{padding:9px 13px;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:rgba(255,255,255,.08);font-size:11px;font-weight:900}.iso-plan-week-grid{display:grid;grid-template-columns:repeat(4,minmax(180px,1fr));gap:15px}.iso-plan-week{padding:17px;border:1px solid rgba(255,255,255,.14);border-radius:16px;background:rgba(255,255,255,.075);backdrop-filter:blur(7px)}.iso-plan-week header{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.iso-plan-week header b{display:block;font-size:18px}.iso-plan-week header span{display:block;margin-top:3px;color:#b9d3e5;font-size:10px}.iso-plan-week header strong{color:#67e8f9;font-size:12px}.iso-plan-bars{height:170px;display:grid;grid-template-columns:repeat(5,1fr);gap:6px;align-items:end;margin-top:18px;padding-top:22px;border-bottom:1px solid rgba(255,255,255,.2)}.iso-plan-day{height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}.iso-plan-bar-track{width:100%;height:135px;display:flex;align-items:flex-end;justify-content:center}.iso-plan-bar{position:relative;width:70%;min-height:2px;border-radius:7px 7px 2px 2px;background:linear-gradient(180deg,#22d3ee,#0284c7);box-shadow:0 4px 14px rgba(34,211,238,.28);transition:height .35s ease}.iso-plan-bar span{position:absolute;top:-19px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:900}.iso-plan-day small{margin:7px 0 5px;color:#d9ebf5;font-size:9px;font-weight:800;text-align:center;line-height:1.25}.iso-plan-day small em{display:block;margin-top:3px;color:#7dd3fc;font-size:8px;font-style:normal;font-weight:800;white-space:nowrap}.iso-plan-week footer{display:flex;justify-content:space-between;gap:8px;margin-top:13px;padding-top:12px;border-top:1px solid rgba(255,255,255,.12);font-size:10px}.iso-plan-week footer b{font-size:15px}.iso-plan-hold{color:#fda4af}.iso-plan-chart-note{display:flex;justify-content:space-between;gap:15px;margin-top:18px;color:#b9d3e5;font-size:10px}@media(max-width:1250px){.iso-plan-week-grid{grid-template-columns:repeat(2,minmax(180px,1fr))}}@media(max-width:650px){.iso-plan-week-grid{grid-template-columns:1fr}.iso-plan-chart-head,.iso-plan-chart-note{align-items:flex-start;flex-direction:column}.iso-plan-chart-card{padding:18px}}.iso-plan-modules input{box-sizing:border-box;width:100%;margin-top:12px;padding:11px 13px;border:1px solid #bfd2e1;border-radius:10px;outline:none}.iso-plan-modules section{display:grid;gap:8px;margin-top:14px;max-height:640px;overflow:auto}.iso-plan-modules section button,.iso-metric{border:0;border-radius:11px;background:linear-gradient(135deg,#2498cb,#1875aa);color:#fff;font-weight:800;cursor:pointer}.iso-plan-modules section button{padding:13px;text-align:left}.iso-plan-modules section button.sel{background:linear-gradient(135deg,#f28a3b,#df642a)}.iso-console{padding:25px;border-radius:22px;overflow:hidden}.iso-console-head{display:flex;align-items:center;justify-content:space-between;gap:28px;flex-wrap:wrap}.iso-console-eyebrow{margin:0;color:#1686bc;font-size:12px;font-weight:900;letter-spacing:.14em}.iso-console-title{margin:6px 0 0;color:#122943;font-size:30px}.iso-progress{width:160px;height:160px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#09be68 calc(var(--p)*1%),#dceaf5 0);position:relative;box-shadow:0 10px 28px rgba(13,157,91,.18)}.iso-progress:after{content:'';position:absolute;inset:16px;border-radius:50%;background:#fff}.iso-progress-content{position:relative;z-index:1;text-align:center}.iso-progress-content b{display:block;font-size:30px;color:#112944}.iso-progress-content span{font-size:12px;color:#35516b}.iso-metrics{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-top:25px}.iso-metric{padding:15px;text-align:left;min-height:94px}.iso-metric span{display:block;font-size:12px;letter-spacing:.04em}.iso-metric b{display:block;margin-top:8px;font-size:28px}.iso-stage-card{margin-top:52px;border:1px solid #d4e3ee;border-radius:17px;overflow:auto;background:#fff}.iso-stage-heading{padding:11px 16px;background:#173f61;color:#fff;font-size:13px;font-weight:900;letter-spacing:.12em;text-align:center}.iso-stage-table{width:100%;min-width:980px;border-collapse:collapse}.iso-stage-table tbody tr+tr th,.iso-stage-table tbody tr+tr td{border-top:18px solid #111827}.iso-stage-table tbody tr+tr th:first-child{border-top-left-radius:8px}.iso-stage-table tbody tr+tr td:last-child{border-top-right-radius:8px}.iso-stage-table th,.iso-stage-table td{padding:10px 8px;border:1px solid #d4e3ee;text-align:center}.iso-stage-table th{background:#dceaf5;color:#163651;font-size:11px}.iso-stage-row-label{min-width:150px!important;background:#f3f8fc!important;font-weight:900!important;color:#173f61!important}.iso-stage-count{border:0;background:transparent;color:#126e9d;font-size:16px;font-weight:900;cursor:pointer}.iso-stage-count:hover{text-decoration:underline}.iso-empty{padding:80px 20px;text-align:center;color:#64748b}@media(max-width:1050px){.iso-plan-layout{grid-template-columns:1fr}.iso-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:1050px){.iso-top-actions{justify-content:flex-start}.iso-top-action{min-width:124px}}@media(max-width:640px){.iso-top-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.iso-top-action{width:100%;min-width:0;padding:12px 10px}}
     `}</style>
     <div className="iso-plan-layout">
       <aside className="iso-plan-modules"><div className="iso-plan-side-head"><h2>Module List</h2></div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/><section>{visibleModules.map((item) => <button className={!consoleMode && selectedModule === item.moduleName ? 'sel' : ''} key={item.moduleName} onClick={() => chooseModule(item.moduleName)}>{item.moduleName}</button>)}</section></aside>
       <section className="iso-console" ref={metricsRef}>
       <div className="iso-top-actions">
-        <button className={'iso-top-action ' + (!consoleMode ? 'active' : '')} onClick={openPlanning}>PLANNING</button>
-        <button className={'iso-top-action ' + (consoleMode ? 'active' : '')} onClick={openConsole}>CONSOLE</button>
+        <button className={'iso-top-action ' + (!consoleMode && moduleSelection ? 'active' : '')} onClick={openPlanning}>PLANNING</button>
+        <button className={'iso-top-action ' + (!planningMode && consoleMode ? 'active' : '')} onClick={openConsole}>CONSOLE</button>
         <button className="iso-top-action" onClick={openAnalytics}>ANALYTICS</button>
         <button className="iso-top-action" onClick={openRevision}>REVISION</button>
-      </div>{selected && selected.entries.length ? <><div className="iso-console-head"><div><p className="iso-console-eyebrow">{consoleMode ? 'PROJECT CONSOLE · ALL MODULES' : 'SELECTED MODULE'}</p><h2 className="iso-console-title">{selected.moduleName}</h2></div><div className="iso-progress" style={{ '--p': issuedPercent }}><div className="iso-progress-content"><b>{issuedPercent}%</b><span>Revision ratio {revisionRatio}</span></div></div></div><div className="iso-metrics"><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'total','Total Isos')}><span>TOTAL ISOS</span><b>{total}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'issued','Issued')}><span>ISSUED</span><b>{issued}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'revision','Revision')}><span>REVISION</span><b>{revision}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'hold','Hold')}><span>HOLD</span><b>{hold}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'balance','Balance Hold Free')}><span>BALANCE HOLD FREE</span><b>{balance}</b></button></div><div className="iso-stage-card" ref={progressRef}><div className="iso-stage-heading">ISO PROGRESS CONTROL</div><table className="iso-stage-table"><thead><tr><th>STATUS</th>{ISO_STAGE_DEFINITIONS.map((stage) => <th key={stage.key}>{stage.label}</th>)}</tr></thead><tbody><tr><th className="iso-stage-row-label">COMPLETED</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, true)}>{stageSummary[stage.key]?.completed || 0}</button></td>)}</tr><tr><th className="iso-stage-row-label">WORK FRONT AVAILABLE</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, false)}>{stageSummary[stage.key]?.available || 0}</button></td>)}</tr></tbody></table></div></> : <div className="iso-empty"><h2>{modules.length ? 'Select a module or open Console' : 'ISO Excel data not found'}</h2><span>{modules.length ? 'Module view shows module-wise counts. Console shows the complete project.' : 'Connect the folder containing ' + ISO_FILE_PREFIX + ' from Reports and Status.'}</span></div>}</section>
+      </div>{selected && selected.entries.length ? <><div className="iso-console-head"><div><p className="iso-console-eyebrow">{consoleMode ? 'PROJECT CONSOLE · ALL MODULES' : 'SELECTED MODULE'}</p><h2 className="iso-console-title">{selected.moduleName}</h2></div><div className="iso-progress" style={{ '--p': issuedPercent }}><div className="iso-progress-content"><b>{issuedPercent}%</b><span>Revision ratio {revisionRatio}</span></div></div></div><div className="iso-metrics"><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'total','Total Isos')}><span>TOTAL ISOS</span><b>{total}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'issued','Issued')}><span>ISSUED</span><b>{issued}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'revision','Revision')}><span>REVISION</span><b>{revision}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'hold','Hold')}><span>HOLD</span><b>{hold}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'balance','Balance Hold Free')}><span>BALANCE HOLD FREE</span><b>{balance}</b></button></div><div className="iso-stage-card" ref={progressRef}><div className="iso-stage-heading">ISO PROGRESS CONTROL</div><table className="iso-stage-table"><thead><tr><th>STATUS</th>{ISO_STAGE_DEFINITIONS.map((stage) => <th key={stage.key}>{stage.label}</th>)}</tr></thead><tbody><tr><th className="iso-stage-row-label">COMPLETED</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, true)}>{stageSummary[stage.key]?.completed || 0}</button></td>)}</tr><tr><th className="iso-stage-row-label">WORK FRONT AVAILABLE</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, false)}>{stageSummary[stage.key]?.available || 0}</button></td>)}</tr></tbody></table></div>{moduleSelection && moduleSelection.entries.length ? <section className="iso-plan-chart-card iso-module-plan-below-progress">
+        <div className="iso-plan-chart-head"><div><p>MONDAY TO FRIDAY · AUTOMATIC FORECAST</p><h2>4 WEEKS PLAN</h2></div><div className="iso-plan-chart-source">FORECAST ISSUE DATE</div></div>
+        <div className="iso-plan-week-grid">{fourWeekPlan.weeks.map((week) => <article className="iso-plan-week" key={week.label}><header><div><b>{week.label}</b><span>{week.range}</span></div><strong>{week.total} ISOs</strong></header><div className="iso-plan-bars">{week.days.map((day) => <div className="iso-plan-day" key={day.label}><div className="iso-plan-bar-track"><div className="iso-plan-bar" style={{ height: Math.max(day.count ? 12 : 2, (day.count / fourWeekPlan.maxValue) * 100) + '%' }}><span>{day.count}</span></div></div><small>{day.label}<em>{day.dateLabel}</em></small></div>)}</div><footer><span>WEEK TOTAL <b>{week.total}</b></span><span className="iso-plan-hold">HOLDS <b>{week.holds}</b></span></footer></article>)}</div>
+        <div className="iso-plan-chart-note"><span>Blank rows and LINE DELETED are excluded.</span><span>HOLD counts only explicit YES values.</span></div>
+      </section> : null}</> : <div className="iso-empty"><h2>{modules.length ? 'Select a module or open Console' : 'ISO Excel data not found'}</h2><span>{modules.length ? 'Module view shows module-wise counts. Console shows the complete project.' : 'Connect the folder containing ' + ISO_FILE_PREFIX + ' from Reports and Status.'}</span></div>}</section>
     </div>
   </Layout>;
 }
