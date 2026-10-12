@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 
-const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management'];
-const REPORTS = ['MTO Report', 'Valve Report', 'Pipe Branch Report', 'Primary Support Report', 'ATTA Report', 'Elbow and Bend Report', 'Equipment Orientation and Position Report', 'Special Item Report', 'Nozzle Report', 'SUPPORT TOOLS'];
+const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management', 'SUPPORT TOOLS'];
+const REPORTS = ['MTO Report', 'Valve Report', 'Pipe Branch Report', 'Primary Support Report', 'ATTA Report', 'Elbow and Bend Report', 'Equipment Orientation and Position Report', 'Special Item Report', 'Nozzle Report'];
 const GROUPS = [
   ['E3D Reports', REPORTS],
   ['Modelling Status', ['Size Status', 'Fluid Code', 'Material and Specification']],
@@ -736,19 +736,22 @@ export default function App() {
   const [page, setPage] = useState('home');
   const [title, setTitle] = useState('');
   const [from, setFrom] = useState('home');
+  const [supportProject, setSupportProject] = useState({ code: '4193', name: 'HAMMER HEAD' });
   const [excelSession, setExcelSession] = useState(() => ({ folderName: '', workbooks: [], modules: readCachedModules() }));
   const go = (nextPage) => { setPage(nextPage); window.scrollTo(0, 0); };
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
+  if (page === 'support-tools') return <SupportToolsPage projectLabel={supportProject.code + ' · ' + supportProject.name} open={(nextTitle) => blank(nextTitle, 'support-tools')} back={() => go('home')} />;
   if (page === 'iso-planning') return <IsoPlanningManagementPage workbooks={excelSession.workbooks} back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'iso-planning')} />;
   if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data or report has been added to this page yet.</span><button onClick={() => go(from)}>Return to Previous Page</button></div></Layout>;
-  return <Home reports={() => go('reports')} isoPlanning={() => go('iso-planning')} blank={(nextTitle) => blank(nextTitle, 'home')} />;
+  return <Home reports={() => go('reports')} isoPlanning={() => go('iso-planning')} supportTools={(code, name) => { setSupportProject({ code, name }); go('support-tools'); }} blank={(nextTitle) => blank(nextTitle, 'home')} />;
 }
 
-function Home({ reports, isoPlanning, blank }) {
+function Home({ reports, isoPlanning, supportTools, blank }) {
   const action = (code, name, actionName) => {
     if (code === '4193' && actionName === 'Reports and Status') return reports();
     if (code === '4193' && actionName === 'ISO Planning and Management') return isoPlanning();
+    if (actionName === 'SUPPORT TOOLS') return supportTools(code, name);
     return blank(`${code} · ${name} · ${actionName}`);
   };
   return <><section className="hero"><div/><main><p>FPSO PROJECT PORTAL</p><h1>Reports Generate Tools</h1></main></section><section className="dashboard"><div className="projects"><Card code="4193" name="HAMMER HEAD" click={(item) => action('4193', 'HAMMER HEAD', item)}/><Card code="4173" name="Gato do Mato" click={(item) => action('4173', 'Gato do Mato', item)}/></div></section></>;
@@ -1065,7 +1068,7 @@ function LineStatusPage({ moduleName, data, back }) {
 }
 
 function SupportToolsPage({ moduleName, open, back }) {
-  const spanTools = ['≤2"', '≥6"'];
+  const spanTools = ['≤2"', '3"-4"', '≥6"'];
   const loadTools = [
     'SUPPORT VALIDATION',
     'SUPPORT TYPE',
@@ -1084,7 +1087,7 @@ function SupportToolsPage({ moduleName, open, back }) {
       .support-tools-panel{padding:24px;border:1px solid #d7e5f0;border-radius:24px;background:#dceaf5;box-shadow:0 14px 34px rgba(23,50,77,.1)}
       .support-tools-panel h3{margin:0 0 20px;text-align:center;color:#172b3c;font-size:23px;font-weight:700}
       .support-tools-buttons{display:grid;gap:10px}.support-tools-buttons button{min-height:58px;padding:12px 16px;border:2px solid rgba(255,255,255,.92);border-radius:9px;color:#fff;font-size:14px;font-weight:800;box-shadow:0 5px 12px rgba(23,50,77,.14);cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}.support-tools-buttons button:hover{transform:translateY(-2px);box-shadow:0 9px 18px rgba(23,50,77,.2);filter:brightness(1.04)}.support-tools-buttons button:active{transform:translateY(0)}
-      .support-span-buttons button:first-child{min-height:88px;background:#147eb3}.support-span-buttons button:last-child{min-height:88px;background:#17699a}
+      .support-span-buttons button{min-height:88px}.support-span-buttons button:nth-child(1){background:#2498cb}.support-span-buttons button:nth-child(2){background:#704b9c}.support-span-buttons button:nth-child(3){background:#ef615d}
       .support-load-buttons button:nth-child(1){background:#167fb4}.support-load-buttons button:nth-child(2){background:#126f9f}.support-load-buttons button:nth-child(3){background:#1b8fc4}.support-load-buttons button:nth-child(4){background:#197caf}.support-load-buttons button:nth-child(5){background:#155f8e}
       @media(max-width:760px){.support-tools-content{padding:18px!important}.support-tools-grid{grid-template-columns:1fr}.support-tools-panel{padding:18px;border-radius:18px}.support-tools-panel h3{font-size:20px}}
     `}</style>

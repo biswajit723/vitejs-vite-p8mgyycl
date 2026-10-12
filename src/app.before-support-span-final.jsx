@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 
-const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management'];
+const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management', 'SUPPORT TOOLS'];
 const REPORTS = ['MTO Report', 'Valve Report', 'Pipe Branch Report', 'Primary Support Report', 'ATTA Report', 'Elbow and Bend Report', 'Equipment Orientation and Position Report', 'Special Item Report', 'Nozzle Report'];
 const GROUPS = [
   ['E3D Reports', REPORTS],
@@ -96,6 +96,38 @@ async function parseWorkbooksFast(files, onProgress) {
   return results;
 }
 
+function isIsoPlanningWorkbook(entry) {
+  const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
+  return normalize(fileNameWithoutExtension).startsWith(normalize('4193_HH_Isometrics Control Sheet-Piping_OFSI'));
+}
+
+function getIsoPlanningModules(workbooks) {
+  const modules = new Map();
+  for (const workbookEntry of workbooks) {
+    if (!isIsoPlanningWorkbook(workbookEntry)) continue;
+    for (const sheetEntry of workbookEntry.sheets) {
+      let headerRowIndex = -1;
+      let moduleColumn = -1;
+      for (let rowIndex = 0; rowIndex < Math.min(sheetEntry.rows.length, 40); rowIndex += 1) {
+        const row = sheetEntry.rows[rowIndex] ?? [];
+        const foundModuleColumn = row.findIndex(isModuleHeader);
+        if (foundModuleColumn >= 0) {
+          headerRowIndex = rowIndex;
+          moduleColumn = foundModuleColumn;
+          break;
+        }
+      }
+      if (headerRowIndex < 0) continue;
+      for (const row of sheetEntry.rows.slice(headerRowIndex + 1)) {
+        const rawModule = String(row?.[moduleColumn] ?? '').trim();
+        const key = normalize(rawModule);
+        if (key && !modules.has(key)) modules.set(key, rawModule);
+      }
+    }
+  }
+  return [...modules.values()];
+}
+
 function reportScore(entry, reportName) {
   const source = normalize(`${entry.file.name} ${entry.file.webkitRelativePath || ''} ${entry.workbook.SheetNames.join(' ')}`);
   const full = normalize(reportName);
@@ -142,6 +174,10 @@ function isNamedReportWorkbook(entry, expectedName) {
   const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
   const nameWithoutTrailingNumbers = fileNameWithoutExtension.replace(/[_\s-]*\d+$/, '');
   return normalize(nameWithoutTrailingNumbers) === normalize(expectedName);
+}
+function isPipeMtoModuleWorkbook(entry) {
+  const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
+  return normalize(fileNameWithoutExtension).startsWith(normalize('EHH_PIPE_MTO_REPORT'));
 }
 function mtoWorkbookCandidates(workbooks) {
   const mtoOnlyWorkbooks = workbooks.filter((entry) =>
@@ -197,6 +233,18 @@ function findAttaReportWorkbook(workbooks) {
 function findPrimarySupportReportWorkbook(workbooks) {
   return workbooks.find((entry) => isNamedReportWorkbook(entry, 'EHH_SUPPORT_REPORT')) ?? null;
 }
+function findElbowBendReportWorkbook(workbooks) {
+  return workbooks.find((entry) => {
+    const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
+    return normalize(fileNameWithoutExtension).startsWith(normalize('EHH_ELBOW_BEND_ANG_REPORT'));
+  }) ?? null;
+}
+function findEquipmentReportWorkbook(workbooks) {
+  return workbooks.find((entry) => {
+    const fileNameWithoutExtension = entry.file.name.replace(/\.[^.]+$/, '');
+    return normalize(fileNameWithoutExtension).startsWith(normalize('EHH_EQUIPMENT_REPORT'));
+  }) ?? null;
+}
 function countValveRemarks(workbooks, moduleName) {
   const workbookEntry = findValveReportWorkbook(workbooks);
   if (!workbookEntry) return 0;
@@ -214,6 +262,12 @@ function countAttaRemarks(workbooks, moduleName) {
 }
 function countPrimarySupportRemarks(workbooks, moduleName) {
   return countReportRemarks(findPrimarySupportReportWorkbook(workbooks), moduleName);
+}
+function countElbowBendRemarks(workbooks, moduleName) {
+  return countReportRemarks(findElbowBendReportWorkbook(workbooks), moduleName);
+}
+function countEquipmentOrientationRemarks(workbooks, moduleName) {
+  return countReportRemarks(findEquipmentReportWorkbook(workbooks), moduleName);
 }
 function copyExactHeaderFill(sourceSheet, outputSheet, headerRowIndex) {
   const range = sourceSheet['!ref'] ? XLSX.utils.decode_range(sourceSheet['!ref']) : null;
@@ -591,12 +645,13 @@ function getSizeStatus(workbooks, moduleName) {
 }
 
 function createSizeStatusWorkbook(moduleName, status, planned) {
+  const calculatedNotModelled = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, Math.max(0, planned[bucket] - status['MODELLED'][bucket])]));
   const rows = [
     [`${moduleName}-Status`, ...SIZE_BUCKETS, 'Grand Total'],
     ['MODELLED', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket]), Object.values(status['MODELLED']).reduce((sum, value) => sum + value, 0)],
-    ['NOT MODELLED', ...SIZE_BUCKETS.map((bucket) => status['NOT MODELLED'][bucket]), Object.values(status['NOT MODELLED']).reduce((sum, value) => sum + value, 0)],
+    ['NOT MODELLED', ...SIZE_BUCKETS.map((bucket) => calculatedNotModelled[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + calculatedNotModelled[bucket], 0)],
     ['PLANNED', ...SIZE_BUCKETS.map((bucket) => planned[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + planned[bucket], 0)],
-    ['GRAND TOTAL', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + planned[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + planned[bucket], 0)],
+    ['GRAND TOTAL', ...SIZE_BUCKETS.map((bucket) => status['MODELLED'][bucket] + calculatedNotModelled[bucket]), SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket] + calculatedNotModelled[bucket], 0)],
   ];
   const output = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
@@ -681,16 +736,24 @@ export default function App() {
   const [page, setPage] = useState('home');
   const [title, setTitle] = useState('');
   const [from, setFrom] = useState('home');
+  const [supportProject, setSupportProject] = useState({ code: '4193', name: 'HAMMER HEAD' });
   const [excelSession, setExcelSession] = useState(() => ({ folderName: '', workbooks: [], modules: readCachedModules() }));
   const go = (nextPage) => { setPage(nextPage); window.scrollTo(0, 0); };
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
+  if (page === 'support-tools') return <SupportToolsPage projectLabel={supportProject.code + ' · ' + supportProject.name} open={(nextTitle) => blank(nextTitle, 'support-tools')} back={() => go('home')} />;
+  if (page === 'iso-planning') return <IsoPlanningManagementPage workbooks={excelSession.workbooks} back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'iso-planning')} />;
   if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data or report has been added to this page yet.</span><button onClick={() => go(from)}>Return to Previous Page</button></div></Layout>;
-  return <Home reports={() => go('reports')} blank={(nextTitle) => blank(nextTitle, 'home')} />;
+  return <Home reports={() => go('reports')} isoPlanning={() => go('iso-planning')} supportTools={(code, name) => { setSupportProject({ code, name }); go('support-tools'); }} blank={(nextTitle) => blank(nextTitle, 'home')} />;
 }
 
-function Home({ reports, blank }) {
-  const action = (code, name, actionName) => code === '4193' && actionName === 'Reports and Status' ? reports() : blank(`${code} · ${name} · ${actionName}`);
+function Home({ reports, isoPlanning, supportTools, blank }) {
+  const action = (code, name, actionName) => {
+    if (code === '4193' && actionName === 'Reports and Status') return reports();
+    if (code === '4193' && actionName === 'ISO Planning and Management') return isoPlanning();
+    if (actionName === 'SUPPORT TOOLS') return supportTools(code, name);
+    return blank(`${code} · ${name} · ${actionName}`);
+  };
   return <><section className="hero"><div/><main><p>FPSO PROJECT PORTAL</p><h1>Reports Generate Tools</h1></main></section><section className="dashboard"><div className="projects"><Card code="4193" name="HAMMER HEAD" click={(item) => action('4193', 'HAMMER HEAD', item)}/><Card code="4173" name="Gato do Mato" click={(item) => action('4173', 'Gato do Mato', item)}/></div></section></>;
 }
 
@@ -752,12 +815,14 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       window.clearInterval(intervalId);
     };
   }, [setExcelSession]);
-  const list = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
+  const list = useMemo(() => modules
+    .filter((moduleName) => normalize(moduleName) !== 'grandtotal' && moduleName.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })), [modules, query]);
   const COUNT_ITEMS = useMemo(() => GROUPS.flatMap(([, items]) => items).filter((item) => item !== 'Size Status'), []);
   const fluidCodeStatus = useMemo(() => getFluidCodeStatus(workbooks, selected), [workbooks, selected]);
   const fluidCodeGrandTotal = useMemo(() => fluidCodeStatus.fluidCodes.reduce((total, fluidCode) => total + fluidCodeStatus.sizes.reduce((sum, size) => sum + (fluidCodeStatus.counts[fluidCode]?.[size] || 0), 0), 0), [fluidCodeStatus]);
   const lineStatus = useMemo(() => getLineStatus(workbooks, selected), [workbooks, selected]);
-  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : item === 'Fluid Code' ? fluidCodeGrandTotal : item === 'Line Status' ? lineStatus.grandTotal : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected, fluidCodeGrandTotal, lineStatus]);
+  const counts = useMemo(() => Object.fromEntries(COUNT_ITEMS.map((item) => [item, selected ? (item === 'MTO Report' ? countMtoRemarks(workbooks, selected) : item === 'Valve Report' ? countValveRemarks(workbooks, selected) : item === 'Pipe Branch Report' ? countPipeBranchRemarks(workbooks, selected) : item === 'ATTA Report' ? countAttaRemarks(workbooks, selected) : item === 'Primary Support Report' ? countPrimarySupportRemarks(workbooks, selected) : item === 'Elbow and Bend Report' ? countElbowBendRemarks(workbooks, selected) : item === 'Equipment Orientation and Position Report' ? countEquipmentOrientationRemarks(workbooks, selected) : item === 'Fluid Code' ? fluidCodeGrandTotal : item === 'Line Status' ? lineStatus.grandTotal : countForModule(findReportWorkbook(workbooks, item), selected)) : 0])), [COUNT_ITEMS, workbooks, selected, fluidCodeGrandTotal, lineStatus]);
 
   const connectFolder = () => inputRef.current?.click();
   const loadFolder = async (event) => {
@@ -771,6 +836,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       });
       const moduleMap = new Map();
       for (const workbookEntry of parsed) {
+        if (!isPipeMtoModuleWorkbook(workbookEntry)) continue;
         for (const sheetEntry of workbookEntry.sheets) {
           if (!sheetEntry.header) continue;
           for (const row of sheetEntry.rows.slice(sheetEntry.header.rowIndex + 1)) {
@@ -788,7 +854,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       cacheModules(dynamicModules);
       setSelected((current) => dynamicModules.some((item) => normalize(item) === normalize(current)) ? current : null);
       if (!dynamicModules.length) {
-        showNotice('warning', 'Folder connected', 'No Module or Module Name column was found in the connected Excel files.');
+        showNotice('warning', 'Folder connected', 'No Module or Module Name column was found in EHH_PIPE_MTO_REPORT.');
         return;
       }
 
@@ -866,6 +932,18 @@ function Reports({ back, open, excelSession, setExcelSession }) {
       if (!createNamedRemarksWorkbook(workbookEntry, selected, 'Primary Support Report')) window.alert(`No ${selected} row with remarks was found for Primary Support Report.`);
       return;
     }
+    if (reportName === 'Elbow and Bend Report') {
+      const workbookEntry = findElbowBendReportWorkbook(workbooks);
+      if (!workbookEntry) { window.alert('No EHH_ELBOW_BEND_ANG_REPORT Excel file was found in the connected folder.'); return; }
+      if (!createNamedRemarksWorkbook(workbookEntry, selected, 'Elbow and Bend Report')) window.alert('No ' + selected + ' row with remarks was found for Elbow and Bend Report.');
+      return;
+    }
+    if (reportName === 'Equipment Orientation and Position Report') {
+      const workbookEntry = findEquipmentReportWorkbook(workbooks);
+      if (!workbookEntry) { window.alert('No EHH_EQUIPMENT_REPORT Excel file was found in the connected folder.'); return; }
+      if (!createNamedRemarksWorkbook(workbookEntry, selected, 'Equipment Orientation and Position Report')) window.alert('No ' + selected + ' row with remarks was found for Equipment Orientation and Position Report.');
+      return;
+    }
     const workbookEntry = findReportWorkbook(workbooks, reportName);
     if (!workbookEntry) { window.alert(`No master Excel found for ${reportName}.`); return; }
     if (!createFilteredWorkbook(workbookEntry, selected, reportName)) window.alert(`No ${selected} row found for ${reportName}.`);
@@ -881,9 +959,12 @@ function Reports({ back, open, excelSession, setExcelSession }) {
   if (statusView === 'Line Status' && selected) {
     return <LineStatusPage moduleName={selected} data={lineStatus} back={() => setStatusView(null)} />;
   }
+  if (statusView === 'SUPPORT TOOLS' && selected) {
+    return <SupportToolsPage moduleName={selected} open={open} back={() => setStatusView(null)} />;
+  }
 
   const openIntegrated = (item) => {
-    if ((item === 'Size Status' || item === 'Fluid Code' || item === 'Line Status') && selected) {
+    if ((item === 'Size Status' || item === 'Fluid Code' || item === 'Line Status' || item === 'SUPPORT TOOLS') && selected) {
       setStatusView(item);
       return;
     }
@@ -900,7 +981,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
     `}</style>
     {notice ? <div className="rgt-notice-stack" role="status" aria-live="polite"><div className={'rgt-notice ' + notice.type}><div className="rgt-notice-icon">{notice.type === 'success' ? '✓' : notice.type === 'warning' ? '!' : notice.type === 'error' ? '×' : ''}</div><div><strong>{notice.title}</strong><p>{notice.message}</p></div>{notice.persistent ? null : <button className="rgt-notice-close" onClick={() => setNotice(null)} aria-label="Close notification">×</button>}</div></div> : null}
     {tokenModal ? <div className="rgt-token-backdrop" role="dialog" aria-modal="true" aria-labelledby="rgt-token-title"><form className="rgt-token-modal" onSubmit={(event) => { event.preventDefault(); closeTokenModal(tokenModal.value); }}><p>SECURE ADMIN SYNC</p><h3 id="rgt-token-title">Publish module list</h3><span>Enter the admin token to publish this module list for all website users. You can continue locally without publishing.</span><input autoFocus type="password" value={tokenModal.value} onChange={(event) => setTokenModal((current) => ({ ...current, value: event.target.value }))} placeholder="Admin sync token" autoComplete="off"/><div className="rgt-token-actions"><button type="button" onClick={() => closeTokenModal('')}>Keep Local</button><button type="submit" disabled={!tokenModal.value.trim()}>Publish</button></div></form></div> : null}
-    <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="folder-connect"><button onClick={connectFolder}>Connect Excel Folder</button><span>{moduleSourceText}</span><input ref={inputRef} className="hidden-folder-input" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple webkitdirectory="" directory="" onChange={loadFolder}/></div><label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label><section>{list.map((moduleName) => <button className={moduleName === selected ? 'sel' : ''} key={moduleName} onClick={() => setSelected((current) => current === moduleName ? null : moduleName)}>{moduleName}</button>)}</section></aside><article className="reports">{selected ? <><header><div><p>SELECTED MODULE</p><h2>{selected}</h2></div><div className="selected-module-actions"><button className="header-download-button" onClick={downloadModuleExcel}>Download {selected} Excel</button><button onClick={() => setSelected(null)}>Close</button></div></header><section className="selected-module-columns">{GROUPS.map(([groupName, items], groupIndex) => <div className="selected-module-column" key={groupName}><h3>{groupName}</h3><div>{items.map((item, itemIndex) => { const isReport = REPORTS.includes(item); const isSizeStatus = item === 'Size Status'; const count = isSizeStatus ? null : (busy ? '…' : counts[item] ?? 0); return <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => isReport ? downloadReport(item) : openIntegrated(item)}><span>{item}</span>{count !== null ? <b>{count}</b> : null}</button>; })}</div></div>)}</section></> : <div className="empty"><b>RGT</b><p>MODULE SELECTION</p><h2>{busy ? 'Reading Excel files…' : modules.length ? 'Select a module' : 'Connect the master Excel folder'}</h2><span>{modules.length ? 'Select a module on the left to open reports here.' : 'The module list will be created automatically from the Module column.'}</span></div>}</article></div><Integrated open={openIntegrated}/></Layout>
+    <Layout title="Reports and Status" sub="Project 4193 · HAMMER HEAD" back={back}><div className="work"><aside><header><p>PROJECT MODULES</p><h2>Module List</h2></header><div className="folder-connect"><button onClick={connectFolder}>Connect Excel Folder</button><span>{moduleSourceText}</span><input ref={inputRef} className="hidden-folder-input" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple webkitdirectory="" directory="" onChange={loadFolder}/></div><label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label><section>{list.map((moduleName) => <button className={moduleName === selected ? 'sel' : ''} key={moduleName} onClick={() => setSelected((current) => current === moduleName ? null : moduleName)}>{moduleName}</button>)}</section></aside><article className="reports">{selected ? <><header><div><p>SELECTED MODULE</p><h2>{selected}</h2></div><div className="selected-module-actions"><button className="header-download-button" onClick={downloadModuleExcel}>Download {selected} Excel</button><button onClick={() => setSelected(null)}>Close</button></div></header><section className="selected-module-columns">{GROUPS.map(([groupName, items], groupIndex) => <div className="selected-module-column" key={groupName}><h3>{groupName}</h3><div>{items.map((item, itemIndex) => { const isReport = REPORTS.includes(item); const isSizeStatus = item === 'Size Status'; const count = isSizeStatus ? null : (busy ? '…' : counts[item] ?? 0); return <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => item === 'SUPPORT TOOLS' ? openIntegrated(item) : isReport ? downloadReport(item) : openIntegrated(item)}><span>{item}</span>{count !== null ? <b>{count}</b> : null}</button>; })}</div></div>)}</section></> : <div className="empty"><b>RGT</b><p>MODULE SELECTION</p><h2>{busy ? 'Reading Excel files…' : modules.length ? 'Select a module' : 'Connect the master Excel folder'}</h2><span>{modules.length ? 'Select a module on the left to open reports here.' : 'The module list will be created automatically from the Module column.'}</span></div>}</article></div><Integrated open={openIntegrated}/></Layout>
   </>;
 }
 
@@ -923,11 +1004,12 @@ function SizeStatusPage({ moduleName, status, back }) {
     });
   };
   const plannedNumber = (bucket) => Math.max(0, Number(planned[bucket]) || 0);
-  const modelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket], 0);
-  const notModelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['NOT MODELLED'][bucket], 0);
-  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + plannedNumber(bucket), 0);
-  const grandTotal = modelledTotal + notModelledTotal + plannedTotal;
   const plannedForExport = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, plannedNumber(bucket)]));
+  const calculatedNotModelled = Object.fromEntries(SIZE_BUCKETS.map((bucket) => [bucket, Math.max(0, plannedForExport[bucket] - status['MODELLED'][bucket])]));
+  const modelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + status['MODELLED'][bucket], 0);
+  const notModelledTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + calculatedNotModelled[bucket], 0);
+  const plannedTotal = SIZE_BUCKETS.reduce((sum, bucket) => sum + plannedForExport[bucket], 0);
+  const grandTotal = modelledTotal + notModelledTotal;
   return <main className="page size-status-page">
     <header className="top size-status-top">
       <div className="size-status-heading"><p>MODELLING STATUS</p><h1>{moduleName} Size Status</h1></div>
@@ -937,9 +1019,9 @@ function SizeStatusPage({ moduleName, status, back }) {
       <thead><tr><th>{moduleName}-Status</th>{SIZE_BUCKETS.map((bucket) => <th key={bucket}>{bucket}</th>)}<th>Grand Total</th></tr></thead>
       <tbody>
         <tr><th>MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket]}</td>)}<td>{modelledTotal}</td></tr>
-        <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['NOT MODELLED'][bucket]}</td>)}<td>{notModelledTotal}</td></tr>
+        <tr><th>NOT MODELLED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{calculatedNotModelled[bucket]}</td>)}<td>{notModelledTotal}</td></tr>
         <tr className="size-status-planned"><th>PLANNED</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}><input type="number" min="0" step="1" inputMode="numeric" value={planned[bucket]} onChange={(event) => updatePlanned(bucket, event.target.value)} onBlur={() => updatePlanned(bucket, plannedNumber(bucket))} aria-label={`Planned ${bucket}`} /></td>)}<td>{plannedTotal}</td></tr>
-        <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + status['NOT MODELLED'][bucket] + plannedNumber(bucket)}</td>)}<td>{grandTotal}</td></tr>
+        <tr className="size-status-grand"><th>GRAND TOTAL</th>{SIZE_BUCKETS.map((bucket) => <td key={bucket}>{status['MODELLED'][bucket] + calculatedNotModelled[bucket]}</td>)}<td>{grandTotal}</td></tr>
       </tbody>
     </table></div></section>
   </main>;
@@ -983,6 +1065,65 @@ function LineStatusPage({ moduleName, data, back }) {
       {!data.sizes.length ? <div className="empty"><p>LINE STATUS</p><h2>No size-wise Status Code data found</h2><span>Connect an Excel file starting with PIPE_E3D_STATUS-EHH_ that contains PIPE and STATUS CODE columns.</span></div> : null}
     </div></section>
   </main>;
+}
+
+function SupportToolsPage({ moduleName, open, back }) {
+  const spanTools = ['≤2"', '≥6"'];
+  const loadTools = [
+    'SUPPORT VALIDATION',
+    'SUPPORT TYPE',
+    'LOCAL STRESS/LOAD FOR PRIMARY SUPPORT',
+    'PRIMARY SUPPORT SELECTION',
+    'SECONDARY SUPPORT VALIDATION AND SELECTION',
+  ];
+  const openBlank = (toolName) => open('SUPPORT TOOLS · ' + moduleName + ' · ' + toolName);
+  return <main className="page support-tools-page">
+    <style>{`
+      .support-tools-top{background:linear-gradient(135deg,#102f4a,#194f73)}
+      .support-tools-content{padding:32px!important;background:#f3f8fc}
+      .support-tools-shell{max-width:1100px;margin:0 auto}
+      .support-tools-intro{margin-bottom:22px}.support-tools-intro p{margin:0;color:#1686bc;font-size:12px;font-weight:800;letter-spacing:.14em}.support-tools-intro h2{margin:6px 0 0;color:#17324d;font-size:26px}
+      .support-tools-grid{display:grid;grid-template-columns:1fr 1.25fr;gap:22px}
+      .support-tools-panel{padding:24px;border:1px solid #d7e5f0;border-radius:24px;background:#dceaf5;box-shadow:0 14px 34px rgba(23,50,77,.1)}
+      .support-tools-panel h3{margin:0 0 20px;text-align:center;color:#172b3c;font-size:23px;font-weight:700}
+      .support-tools-buttons{display:grid;gap:10px}.support-tools-buttons button{min-height:58px;padding:12px 16px;border:2px solid rgba(255,255,255,.92);border-radius:9px;color:#fff;font-size:14px;font-weight:800;box-shadow:0 5px 12px rgba(23,50,77,.14);cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}.support-tools-buttons button:hover{transform:translateY(-2px);box-shadow:0 9px 18px rgba(23,50,77,.2);filter:brightness(1.04)}.support-tools-buttons button:active{transform:translateY(0)}
+      .support-span-buttons button:first-child{min-height:88px;background:#147eb3}.support-span-buttons button:last-child{min-height:88px;background:#17699a}
+      .support-load-buttons button:nth-child(1){background:#167fb4}.support-load-buttons button:nth-child(2){background:#126f9f}.support-load-buttons button:nth-child(3){background:#1b8fc4}.support-load-buttons button:nth-child(4){background:#197caf}.support-load-buttons button:nth-child(5){background:#155f8e}
+      @media(max-width:760px){.support-tools-content{padding:18px!important}.support-tools-grid{grid-template-columns:1fr}.support-tools-panel{padding:18px;border-radius:18px}.support-tools-panel h3{font-size:20px}}
+    `}</style>
+    <header className="top support-tools-top">
+      <button onClick={back}>Back</button>
+      <div><p>REPORTS GENERATE TOOLS</p><h1>Support Tools</h1><span>{moduleName}</span></div>
+    </header>
+    <section className="content support-tools-content">
+      <div className="support-tools-shell">
+        <div className="support-tools-intro"><p>SUPPORT ENGINEERING</p><h2>Select a Support Tool</h2></div>
+        <div className="support-tools-grid">
+          <article className="support-tools-panel"><h3>Support Span Check</h3><div className="support-tools-buttons support-span-buttons">{spanTools.map((tool) => <button key={tool} onClick={() => openBlank(tool)}>{tool}</button>)}</div></article>
+          <article className="support-tools-panel"><h3>Support Load Validation</h3><div className="support-tools-buttons support-load-buttons">{loadTools.map((tool) => <button key={tool} onClick={() => openBlank(tool)}>{tool}</button>)}</div></article>
+        </div>
+      </div>
+    </section>
+  </main>;
+}
+
+function IsoPlanningManagementPage({ workbooks, back, open }) {
+  const [query, setQuery] = useState('');
+  const modules = useMemo(() => getIsoPlanningModules(workbooks)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })), [workbooks]);
+  const filteredModules = useMemo(() => modules.filter((moduleName) => moduleName.toLowerCase().includes(query.trim().toLowerCase())), [modules, query]);
+  return <Layout title="ISO Planning and Management" sub="Project 4193 · HAMMER HEAD" back={back}>
+    <div className="work">
+      <aside>
+        <header><p>PROJECT MODULES</p><h2>Module List</h2></header>
+        <label>⌕<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search module name"/></label>
+        <section>{filteredModules.map((moduleName) => <button key={moduleName} onClick={() => open('ISO Planning and Management · ' + moduleName)}>{moduleName}</button>)}</section>
+      </aside>
+      <article className="reports">
+        <div className="empty"><b>RGT</b><p>ISO PLANNING AND MANAGEMENT</p><h2>{modules.length ? 'Select a module' : 'ISO module data is not loaded'}</h2><span>{modules.length ? 'Select a module on the left to continue.' : 'Connect the Excel folder once from Reports and Status. ISO modules are read only from 4193_HH_Isometrics Control Sheet-Piping_OFSI.'}</span></div>
+      </article>
+    </div>
+  </Layout>;
 }
 
 function Integrated({ open }) {
