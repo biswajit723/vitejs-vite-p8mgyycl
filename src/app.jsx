@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 const ACTIONS = ['Reports and Status', 'Model vs. MTO vs. PID Check', 'Equipment Status', 'ISO Planning and Management', 'Support Planning and Management', 'SUPPORT TOOLS'];
 const REPORTS = ['MTO Report', 'Valve Report', 'Pipe Branch Report', 'Primary Support Report', 'ATTA Report', 'Elbow and Bend Report', 'Equipment Orientation and Position Report', 'Special Item Report', 'Nozzle Report'];
@@ -1183,6 +1184,7 @@ async function publishCentralModules(modules, token) {
 
 export default function App() {
   const [page, setPage] = useState('home');
+  const [excelViewerOpen, setExcelViewerOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [from, setFrom] = useState('home');
   const [supportProject, setSupportProject] = useState({ code: '4193', name: 'HAMMER HEAD' });
@@ -1190,7 +1192,7 @@ export default function App() {
   const go = (nextPage) => { setPage(nextPage); window.scrollTo(0, 0); };
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
-  if (page === 'iso-planning-dashboard') return <IsoPlanningDashboardPage workbooks={excelSession.workbooks} back={() => go('home')} />;
+  if (page === 'iso-planning-dashboard') return <><IsoPlanningDashboardPage workbooks={excelSession.workbooks} back={() => go('home')} openExcel={() => setExcelViewerOpen(true)} />{excelViewerOpen ? <ExcelWorkbookViewer existingWorkbooks={excelSession.workbooks} onClose={() => setExcelViewerOpen(false)} /> : null}</>;
   if (page === 'support-tools') return <SupportToolsPage projectLabel={supportProject.code + ' · ' + supportProject.name} open={(nextTitle) => blank(nextTitle, 'support-tools')} back={() => go('home')} />;
   if (page === 'iso-planning') return <IsoPlanningManagementPage workbooks={excelSession.workbooks} back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'iso-planning')} />;
   if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data or report has been added to this page yet.</span><button onClick={() => go(from)}>Return to Previous Page</button></div></Layout>;
@@ -1576,7 +1578,7 @@ function IsoPlanningManagementPage({ workbooks, back, open }) {
   </Layout>;
 }
 
-function IsoPlanningDashboardPage({ workbooks, back }) {
+function IsoPlanningDashboardPage({ workbooks, back, openExcel }) {
   const [selectedModule, setSelectedModule] = useState(null);
   const [query, setQuery] = useState('');
   const [consoleMode, setConsoleMode] = useState(false);
@@ -1646,6 +1648,7 @@ function IsoPlanningDashboardPage({ workbooks, back }) {
         <button className={'iso-top-action ' + (!planningMode && consoleMode ? 'active' : '')} onClick={openConsole}>CONSOLE</button>
         <button className="iso-top-action" onClick={openAnalytics}>ANALYTICS</button>
         <button className="iso-top-action" onClick={openRevision}>REVISION</button>
+        <button className="iso-top-action" onClick={openExcel}>EXCEL</button>
       </div>{selected && selected.entries.length ? <>{!planningMode ? <><div className="iso-console-head"><div><p className="iso-console-eyebrow">{consoleMode ? 'PROJECT CONSOLE · ALL MODULES' : 'SELECTED MODULE'}</p><h2 className="iso-console-title">{selected.moduleName}</h2></div><div className="iso-progress" style={{ '--p': issuedPercent }}><div className="iso-progress-content"><b>{issuedPercent}%</b><span>Revision ratio {revisionRatio}</span></div></div></div><div className="iso-metrics"><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'total','Total Isos')}><span>TOTAL ISOS</span><b>{total}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'issued','Issued')}><span>ISSUED</span><b>{issued}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'revision','Revision')}><span>REVISION</span><b>{revision}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'hold','Hold')}><span>HOLD</span><b>{hold}</b></button><button className="iso-metric" onClick={() => downloadIsoMetric(selected,'balance','Balance Hold Free')}><span>BALANCE HOLD FREE</span><b>{balance}</b></button></div><div className="iso-stage-card" ref={progressRef}><div className="iso-stage-heading">ISO PROGRESS CONTROL</div><table className="iso-stage-table"><thead><tr><th>STATUS</th>{ISO_STAGE_DEFINITIONS.map((stage) => <th key={stage.key}>{stage.label}</th>)}</tr></thead><tbody><tr><th className="iso-stage-row-label">COMPLETED</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, true)}>{stageSummary[stage.key]?.completed || 0}</button></td>)}</tr><tr><th className="iso-stage-row-label">WORK FRONT AVAILABLE</th>{ISO_STAGE_DEFINITIONS.map((stage) => <td key={stage.key}><button className="iso-stage-count" onClick={() => downloadIsoStage(selected, stage, false)}>{stageSummary[stage.key]?.available || 0}</button></td>)}</tr></tbody></table></div></> : null}{planningMode ? <section className="iso-plan-chart-card iso-month-plan" style={{'--module-count':Math.max(1,projectMonthPlan.modules.length)}}>
         <div className="iso-plan-chart-head"><div><p>ALL MODULES · LATEST 4 MONTHS AUTOMATIC FORECAST</p><h2>4 MONTHS PLAN</h2></div><div className="iso-month-plan-summary"><span>NO. OF ISOS <b>{projectMonthPlan.grandTotal}</b></span><span>HOLDS <b>{projectMonthPlan.grandHolds}</b></span></div></div>
         <div className="iso-month-legend"><span><i className="m1"/>MONTH 1</span><span><i className="m2"/>MONTH 2</span><span><i className="m3"/>MONTH 3</span><span><i className="m4"/>MONTH 4</span></div>
@@ -1666,6 +1669,666 @@ function IsoPlanningDashboardPage({ workbooks, back }) {
 function Integrated({ open }) {
   return <section className="integrated"><header><p>INTEGRATED TOOL</p><h2>Overall Project and Module-Wise Status</h2></header><div>{GROUPS.map(([groupName, items], groupIndex) => <article key={groupName}><h3>{groupName}</h3><section>{items.map((item, itemIndex) => <button className={`c${(groupIndex + itemIndex) % 5}`} key={item} onClick={() => open(item)}>{item}</button>)}</section></article>)}</div></section>;
 }
+
+const EXCEL_VIEWER_MANUAL_MAP_KEY = 'rgt-excel-viewer-manual-columns-v3';
+const EXCEL_VIEWER_EDIT_PREFIX = 'rgt-excel-viewer-cell-edits-v3:';
+const EXCEL_MAIN_SHEET_NAME = 'HH_TOPSIDE_OVERALL_CS_OFSI';
+const EXCEL_SHEET_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+const EXCEL_REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const EXCEL_XML_NS = 'http://www.w3.org/XML/1998/namespace';
+const EXCEL_DASH_STAGES = [
+  { label: 'ISO EXTRACTION', aliases: ['isoextraction', 'isoextract'] },
+  { label: 'LAYOUT CHECK', aliases: ['layoutcheck'] },
+  { label: 'STRESS CHECK', aliases: ['stresscheck'] },
+  { label: 'SUPPORT CHECK', aliases: ['supportcheck'] },
+  { label: 'BACK DRAFT', aliases: ['backdraft'] },
+  { label: 'BACK CHECK', aliases: ['backcheck'] },
+  { label: 'QC CHECK', aliases: ['qccheck'] },
+  { label: 'MODULE ENGINEER CHECK', aliases: ['moduleengineercheck'] },
+  { label: 'TO CP', aliases: ['tocp'] },
+];
+const EXCEL_DASH_FILTERS = [
+  { label: 'MODULE', aliases: ['module'] },
+  { label: 'SIZE', aliases: ['size'] },
+  { label: 'SPEC', aliases: ['spec'] },
+  { label: 'PRIORITY', aliases: ['priority'] },
+  { label: 'LEVEL', aliases: ['level'] },
+  { label: 'SERVICE', aliases: ['service'] },
+  { label: 'STEPS COMPLETED', aliases: ['stepscompleted', 'steps'] },
+  { label: 'MATERIAL', aliases: ['materialcategory', 'material'] },
+  { label: 'MODULE YARD', aliases: ['moduleyard'] },
+  { label: 'HOLD', aliases: ['hold'] },
+];
+
+function excelNorm(value) {
+  return String(value ?? '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+}
+function excelCleanHeader(value) {
+  return String(value ?? '')
+    .replace(/\s*[([]\s*MANUAL[^)\]]*[)\]]/ig, '')
+    .replace(/\s+MANUAL(?:\s*[-–]\s*(?:DROP\s*DOWN|DROPDOWN|DRP\s*DOWN))?/ig, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+function excelHasManualMarker(value) {
+  return /\bmanual\b/i.test(String(value ?? ''));
+}
+function excelCellAddress(row, col) {
+  return XLSX.utils.encode_cell({ r: row, c: col });
+}
+function excelCell(sheet, row, col) {
+  return sheet?.[excelCellAddress(row, col)] || null;
+}
+function excelCellRawValue(cell) {
+  if (!cell) return '';
+  if (cell.v instanceof Date) return cell.w || cell.v.toLocaleDateString();
+  return cell.w !== undefined && cell.w !== null && cell.w !== '' ? cell.w : (cell.v ?? '');
+}
+function excelHeaderRowIndex(sheet) {
+  if (!sheet?.['!ref']) return 0;
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const stop = Math.min(range.e.r, Math.max(range.s.r + 18, 18));
+  let bestRow = range.s.r;
+  let bestScore = -1;
+  for (let r = range.s.r; r <= stop; r += 1) {
+    let score = 0;
+    for (let c = range.s.c; c <= range.e.c; c += 1) {
+      const cell = excelCell(sheet, r, c);
+      if (cell && ((cell.v !== undefined && cell.v !== null && String(cell.v).trim() !== '') || cell.f)) score += 1;
+    }
+    if (score > bestScore) { bestScore = score; bestRow = r; }
+  }
+  return bestRow;
+}
+function excelManualMapRead() {
+  try { return JSON.parse(window.localStorage.getItem(EXCEL_VIEWER_MANUAL_MAP_KEY) || '{}') || {}; }
+  catch { return {}; }
+}
+function excelManualMapWrite(map) {
+  try { window.localStorage.setItem(EXCEL_VIEWER_MANUAL_MAP_KEY, JSON.stringify(map)); } catch (error) { console.warn('Excel manual-column mapping could not be saved in this browser.', error); }
+}
+function excelHeaderKey(name, occurrence = 1) {
+  return `${excelNorm(excelCleanHeader(name))}#${occurrence}`;
+}
+function excelEditableStorageKey(file) {
+  return `${EXCEL_VIEWER_EDIT_PREFIX}${excelNorm(file?.name)}:${file?.size || 0}:${file?.lastModified || 0}`;
+}
+function excelReadStoredEdits(key) {
+  try { return JSON.parse(window.localStorage.getItem(key) || '{}') || {}; } catch { return {}; }
+}
+function excelSaveStoredEdits(key, edits) {
+  try {
+    // Save only changed cells, not the workbook itself or its office data.
+    window.localStorage.setItem(key, JSON.stringify(edits));
+  } catch (error) {
+    console.warn('Browser storage is full; edits are still in the current session and can be downloaded.', error);
+  }
+}
+function excelColor(value) {
+  if (!value) return undefined;
+  if (typeof value === 'string') {
+    const text = value.replace(/^#/, '');
+    return text.length === 8 ? `#${text.slice(2)}` : `#${text}`;
+  }
+  if (value.rgb) return excelColor(value.rgb);
+  if (value.argb) return excelColor(value.argb);
+  const theme = { 0: '#FFFFFF', 1: '#000000', 2: '#E7E6E6', 3: '#44546A', 4: '#4472C4', 5: '#ED7D31', 6: '#A5A5A5', 7: '#FFC000', 8: '#5B9BD5', 9: '#70AD47' };
+  if (value.theme !== undefined) return theme[value.theme];
+  return undefined;
+}
+function excelCellCss(cell, isHeader = false) {
+  const style = cell?.s || {};
+  const fill = style.fill || {};
+  const fillColor = excelColor(fill.fgColor) || excelColor(fill.bgColor);
+  const font = style.font || {};
+  const alignment = style.alignment || {};
+  const border = style.border || {};
+  const css = {
+    backgroundColor: fillColor || (isHeader ? '#d9ead3' : '#ffffff'),
+    color: excelColor(font.color) || '#111827',
+    fontWeight: font.bold || isHeader ? 700 : 400,
+    fontStyle: font.italic ? 'italic' : 'normal',
+    fontSize: font.sz ? `${Math.max(9, Math.min(18, Number(font.sz)))}px` : '12px',
+    textAlign: alignment.horizontal === 'center' ? 'center' : alignment.horizontal === 'right' ? 'right' : 'left',
+    verticalAlign: alignment.vertical === 'top' ? 'top' : alignment.vertical === 'bottom' ? 'bottom' : 'middle',
+    whiteSpace: alignment.wrapText ? 'pre-wrap' : 'pre-wrap',
+    textDecoration: font.strike ? 'line-through' : 'none',
+  };
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    const sideStyle = border[side];
+    if (sideStyle && sideStyle.style && sideStyle.style !== 'none') {
+      const width = /medium|thick|double/i.test(sideStyle.style) ? 2 : 1;
+      css[`border${side[0].toUpperCase()}${side.slice(1)}`] = `${width}px solid ${excelColor(sideStyle.color) || '#aebbc7'}`;
+    }
+  }
+  return css;
+}
+function excelColumnWidth(sheet, col) {
+  const item = sheet?.['!cols']?.[col];
+  const raw = item?.wpx || (item?.wch ? item.wch * 7 + 12 : 115);
+  return Math.max(44, Math.min(320, Math.round(raw)));
+}
+function excelRowHeight(sheet, row) {
+  const item = sheet?.['!rows']?.[row];
+  return Math.max(18, Math.min(80, Math.round(item?.hpx || (item?.hpt ? item.hpt * 1.333 : 27))));
+}
+function excelMergeInfo(sheet, row, col) {
+  for (const merge of sheet?.['!merges'] || []) {
+    if (row < merge.s.r || row > merge.e.r || col < merge.s.c || col > merge.e.c) continue;
+    if (row !== merge.s.r || col !== merge.s.c) return { skip: true };
+    return { rowSpan: merge.e.r - merge.s.r + 1, colSpan: merge.e.c - merge.s.c + 1 };
+  }
+  return {};
+}
+function excelColumnBoolean(header) {
+  const key = excelNorm(header);
+  return EXCEL_DASH_STAGES.some((stage) => stage.aliases.some((alias) => key === alias || key.startsWith(alias))) || key === 'issuedtocp' || key.startsWith('issuedtocp');
+}
+function excelBooleanValue(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value === null || value === undefined || value === '') return false;
+  return ['true', 'yes', 'y', 'checked', '1', '100%'].includes(String(value).trim().toLowerCase());
+}
+function excelHeaderMapForBook(workbook, existingMap, edits) {
+  const map = { ...(existingMap || {}) };
+  const descriptors = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const range = XLSX.utils.decode_range(sheet?.['!ref'] || 'A1');
+    const headerRow = excelHeaderRowIndex(sheet);
+    const sheetKey = excelNorm(sheetName);
+    const oldSheetMap = { ...(map[sheetKey] || {}) };
+    const occurrences = {};
+    const columns = [];
+    for (let col = range.s.c; col <= range.e.c; col += 1) {
+      const cell = excelCell(sheet, headerRow, col);
+      const raw = String(cell?.v ?? '');
+      const clean = excelCleanHeader(raw);
+      const norm = excelNorm(clean);
+      occurrences[norm] = (occurrences[norm] || 0) + 1;
+      const key = excelHeaderKey(clean, occurrences[norm]);
+      const hasMarker = excelHasManualMarker(raw);
+      const wasSaved = oldSheetMap[key] === true;
+      const manual = hasMarker || wasSaved;
+      if (hasMarker) oldSheetMap[key] = true;
+      if (hasMarker && clean !== raw && cell) {
+        const addr = excelCellAddress(headerRow, col);
+        edits[sheetName] = { ...(edits[sheetName] || {}), [addr]: { value: clean, type: 's' } };
+        sheet[addr] = { ...cell, v: clean, w: clean, t: 's' };
+      }
+      columns.push({ col, name: clean, rawName: raw, norm, key, manual, headerAddress: excelCellAddress(headerRow, col) });
+    }
+    map[sheetKey] = oldSheetMap;
+    const headerLabel = columns.map((item) => item.name).join(' ');
+    descriptors.push({ sheetName, sheet, range, headerRow, columns, hasManualHeaders: /manual/i.test(headerLabel) });
+  }
+  excelManualMapWrite(map);
+  return { descriptors, manualMap: map };
+}
+function excelNameLooksRight(file) {
+  const name = String(file?.name || '').replace(/\.[^.]+$/, '');
+  const normalized = excelNorm(name);
+  const expected = excelNorm('4193_HH_Isometrics Control Sheet-Piping_OFSI');
+  return normalized === expected || (normalized.startsWith(expected) && /^\d+$/.test(normalized.slice(expected.length)));
+}
+function excelBinaryBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  return btoa(binary);
+}
+function excelParseXml(xmlText, label) {
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error(`Could not read Excel package XML: ${label}`);
+  return doc;
+}
+function excelGetNs(node, name, ns = EXCEL_SHEET_NS) {
+  return Array.from(node.getElementsByTagNameNS(ns, name));
+}
+function excelA1Parts(address) {
+  const match = /^([A-Z]+)(\d+)$/i.exec(address);
+  if (!match) return { col: 1, row: 1 };
+  let col = 0;
+  for (const char of match[1].toUpperCase()) col = col * 26 + char.charCodeAt(0) - 64;
+  return { col, row: Number(match[2]) };
+}
+function excelGetOrCreateXmlCell(sheetDoc, address) {
+  const cells = excelGetNs(sheetDoc, 'c');
+  let found = cells.find((cell) => cell.getAttribute('r') === address);
+  if (found) return found;
+  const { col, row } = excelA1Parts(address);
+  const sheetData = excelGetNs(sheetDoc, 'sheetData')[0];
+  if (!sheetData) throw new Error('The workbook sheet has no sheetData node.');
+  let rowNode = excelGetNs(sheetData, 'row').find((item) => Number(item.getAttribute('r')) === row);
+  if (!rowNode) {
+    rowNode = sheetDoc.createElementNS(EXCEL_SHEET_NS, 'row');
+    rowNode.setAttribute('r', String(row));
+    const followingRow = excelGetNs(sheetData, 'row').find((item) => Number(item.getAttribute('r')) > row);
+    sheetData.insertBefore(rowNode, followingRow || null);
+  }
+  const cellNode = sheetDoc.createElementNS(EXCEL_SHEET_NS, 'c');
+  cellNode.setAttribute('r', address);
+  const sameColumn = cells.find((cell) => excelA1Parts(cell.getAttribute('r') || 'A1').col === col && cell.hasAttribute('s'));
+  if (sameColumn) cellNode.setAttribute('s', sameColumn.getAttribute('s'));
+  const nextCell = Array.from(rowNode.children).find((item) => item.localName === 'c' && excelA1Parts(item.getAttribute('r') || 'A1').col > col);
+  rowNode.insertBefore(cellNode, nextCell || null);
+  return cellNode;
+}
+function excelWriteXmlCell(sheetDoc, address, edit) {
+  const cell = excelGetOrCreateXmlCell(sheetDoc, address);
+  for (const child of Array.from(cell.childNodes)) {
+    if (child.nodeType === 1 && ['v', 'f', 'is'].includes(child.localName)) cell.removeChild(child);
+  }
+  const val = edit?.value;
+  const type = edit?.type || (typeof val === 'number' ? 'n' : 's');
+  if (val === '' || val === null || val === undefined) {
+    cell.removeAttribute('t');
+    return;
+  }
+  if (type === 'b') {
+    cell.setAttribute('t', 'b');
+    const v = sheetDoc.createElementNS(EXCEL_SHEET_NS, 'v'); v.textContent = val ? '1' : '0'; cell.appendChild(v);
+    return;
+  }
+  if (type === 'n' || typeof val === 'number') {
+    const number = Number(val);
+    if (Number.isFinite(number)) {
+      cell.setAttribute('t', 'n');
+      const v = sheetDoc.createElementNS(EXCEL_SHEET_NS, 'v'); v.textContent = String(number); cell.appendChild(v);
+      return;
+    }
+  }
+  if (type === 'd') {
+    const asDate = val instanceof Date ? val : (typeof val === 'string' ? new Date(val) : null);
+    const serial = asDate && !Number.isNaN(asDate.getTime()) ? (asDate.getTime() / 86400000) + 25569 : Number(val);
+    if (Number.isFinite(serial)) {
+      cell.setAttribute('t', 'n');
+      const v = sheetDoc.createElementNS(EXCEL_SHEET_NS, 'v'); v.textContent = String(serial); cell.appendChild(v);
+      return;
+    }
+  }
+  cell.setAttribute('t', 'inlineStr');
+  const inline = sheetDoc.createElementNS(EXCEL_SHEET_NS, 'is');
+  const t = sheetDoc.createElementNS(EXCEL_SHEET_NS, 't');
+  t.setAttributeNS(EXCEL_XML_NS, 'xml:space', 'preserve');
+  t.textContent = String(val);
+  inline.appendChild(t);
+  cell.appendChild(inline);
+}
+function excelPatchRawWorkbook(rawBytes, workbook, edits) {
+  const files = unzipSync(rawBytes);
+  const wbPath = 'xl/workbook.xml';
+  const relPath = 'xl/_rels/workbook.xml.rels';
+  if (!files[wbPath] || !files[relPath]) throw new Error('This file does not appear to be a valid Excel workbook package.');
+  const wbDoc = excelParseXml(strFromU8(files[wbPath]), wbPath);
+  const relDoc = excelParseXml(strFromU8(files[relPath]), relPath);
+  const relationships = new Map(excelGetNs(relDoc, 'Relationship', 'http://schemas.openxmlformats.org/package/2006/relationships').map((item) => [item.getAttribute('Id'), item.getAttribute('Target')]));
+  const sheetNodes = excelGetNs(wbDoc, 'sheet');
+  const pathByName = {};
+  sheetNodes.forEach((node) => {
+    const relId = node.getAttributeNS(EXCEL_REL_NS, 'id') || node.getAttribute('r:id');
+    let target = relationships.get(relId) || '';
+    target = target.replace(/^\/+/, '');
+    if (!target.startsWith('xl/')) target = `xl/${target}`;
+    pathByName[node.getAttribute('name')] = target;
+  });
+  for (const [sheetName, changed] of Object.entries(edits || {})) {
+    if (!Object.keys(changed || {}).length) continue;
+    const path = pathByName[sheetName];
+    if (!path || !files[path]) continue;
+    const sheetDoc = excelParseXml(strFromU8(files[path]), path);
+    for (const [address, edit] of Object.entries(changed)) excelWriteXmlCell(sheetDoc, address, edit);
+    files[path] = strToU8(new XMLSerializer().serializeToString(sheetDoc));
+  }
+  // Ask Excel to recalculate formulas when opened, without deleting macro/pivot/chart/slicer parts.
+  const calcPr = excelGetNs(wbDoc, 'calcPr')[0];
+  if (calcPr) {
+    calcPr.setAttribute('calcMode', 'auto'); calcPr.setAttribute('fullCalcOnLoad', '1'); calcPr.setAttribute('forceFullCalc', '1');
+    files[wbPath] = strToU8(new XMLSerializer().serializeToString(wbDoc));
+  } else {
+    files[wbPath] = strToU8(new XMLSerializer().serializeToString(wbDoc));
+  }
+  // Refresh pivot cache data when opened in desktop Excel. This retains its existing fields and slicer connections.
+  for (const path of Object.keys(files)) {
+    if (!/^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/.test(path)) continue;
+    const doc = excelParseXml(strFromU8(files[path]), path);
+    const root = doc.documentElement;
+    root.setAttribute('refreshOnLoad', '1');
+    files[path] = strToU8(new XMLSerializer().serializeToString(doc));
+  }
+  return zipSync(files, { level: 6 });
+}
+function excelFormatEditValue(value, cell, headerCell = false) {
+  if (headerCell) return { value: String(value ?? ''), type: 's' };
+  if (cell?.t === 'd') {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return { value: date.toISOString(), type: 'd' };
+  }
+  if (typeof cell?.v === 'number') {
+    const text = String(value ?? '').trim();
+    if (text === '') return { value: '', type: 's' };
+    if (/^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) return { value: Number(text), type: 'n' };
+  }
+  if (typeof cell?.v === 'boolean') return { value: excelBooleanValue(value), type: 'b' };
+  const text = String(value ?? '');
+  if (text === '') return { value: '', type: 's' };
+  if (/^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(text) && !/^0\d+/.test(text)) return { value: Number(text), type: 'n' };
+  return { value: text, type: 's' };
+}
+
+function ExcelWorkbookViewer({ existingWorkbooks = [], onClose }) {
+  const fileInputRef = useRef(null);
+  const [data, setData] = useState(null);
+  const [activeSheet, setActiveSheet] = useState('Dashboard');
+  const [gridDashboard, setGridDashboard] = useState(false);
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const preferredEntry = useMemo(() => existingWorkbooks.find((entry) => isIsoPlanningWorkbook(entry)), [existingWorkbooks]);
+
+  const loadWorkbook = async (file) => {
+    if (!file) return;
+    if (!excelNameLooksRight(file)) {
+      setError('Choose the workbook named 4193_HH_Isometrics Control Sheet-Piping_OFSI. A numeric suffix after OFSI is allowed.');
+      return;
+    }
+    setBusy(true); setError(''); setStatus('Reading workbook locally…');
+    try {
+      const buffer = new Uint8Array(await file.arrayBuffer());
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true, cellStyles: true, bookVBA: true, WTF: false });
+      if (!workbook.SheetNames?.length) throw new Error('No worksheets were found in this Excel file.');
+      const editKey = excelEditableStorageKey(file);
+      let edits = excelReadStoredEdits(editKey);
+      const storedManualMap = excelManualMapRead();
+      const mapped = excelHeaderMapForBook(workbook, storedManualMap, edits);
+      // Re-apply saved cell edits for this exact local file, while leaving other workbooks untouched.
+      const clonedSheets = { ...workbook.Sheets };
+      for (const [sheetName, sheetEdits] of Object.entries(edits)) {
+        if (!clonedSheets[sheetName]) continue;
+        const clonedSheet = { ...clonedSheets[sheetName] };
+        for (const [address, edit] of Object.entries(sheetEdits || {})) {
+          const previous = clonedSheet[address] || { t: edit.type || 's' };
+          let value = edit.value;
+          if (edit.type === 'd' && typeof value === 'string') value = new Date(value);
+          clonedSheet[address] = { ...previous, t: edit.type || 's', v: value, w: value instanceof Date ? value.toLocaleDateString() : String(value ?? '') };
+        }
+        clonedSheets[sheetName] = clonedSheet;
+      }
+      const nextWorkbook = { ...workbook, Sheets: clonedSheets };
+      const zipFiles = unzipSync(buffer);
+      const imagePath = Object.keys(zipFiles).find((name) => /^xl\/media\/image\d+\.(png|jpe?g)$/i.test(name));
+      let logoUrl = '';
+      if (imagePath) {
+        const mime = /jpe?g$/i.test(imagePath) ? 'image/jpeg' : 'image/png';
+        logoUrl = `data:${mime};base64,${excelBinaryBase64(zipFiles[imagePath])}`;
+      }
+      const descriptors = excelHeaderMapForBook(nextWorkbook, mapped.manualMap, edits).descriptors;
+      const defaultSheet = nextWorkbook.SheetNames.includes('Dashboard') ? 'Dashboard' : nextWorkbook.SheetNames[0];
+      setData({ file, fileName: file.name, fileSize: file.size, lastModified: file.lastModified, rawBytes: buffer, workbook: nextWorkbook, sheetNames: nextWorkbook.SheetNames, descriptors, edits, editKey, logoUrl, manualMap: excelManualMapRead() });
+      setActiveSheet(defaultSheet); setGridDashboard(false); setStatus(`Read ${nextWorkbook.SheetNames.length} sheets locally. Data stays in this browser.`);
+      excelSaveStoredEdits(editKey, edits);
+    } catch (loadError) {
+      console.error('Excel viewer could not read the workbook.', loadError);
+      setError(`Could not open workbook: ${loadError?.message || String(loadError)}`); setStatus('');
+    } finally { setBusy(false); }
+  };
+
+  useEffect(() => {
+    if (data || !preferredEntry?.file) return;
+    loadWorkbook(preferredEntry.file);
+    // Only auto-open once for the connected file. Manual file selection remains user-controlled.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferredEntry]);
+
+  const updateCell = (sheetName, address, inputValue, isHeader, checkbox = false) => {
+    setData((current) => {
+      if (!current) return current;
+      const sheet = current.workbook.Sheets[sheetName];
+      const oldCell = sheet?.[address] || { t: 's', v: '' };
+      const edit = checkbox
+        ? { value: (typeof oldCell.v === 'number' || oldCell.t === 'n') ? (inputValue ? 1 : 0) : Boolean(inputValue), type: (typeof oldCell.v === 'number' || oldCell.t === 'n') ? 'n' : 'b' }
+        : excelFormatEditValue(inputValue, oldCell, isHeader);
+      const newCell = { ...oldCell, v: edit.value, t: edit.type };
+      if (newCell.f) delete newCell.f;
+      newCell.w = edit.value instanceof Date ? edit.value.toLocaleDateString() : String(edit.value ?? '');
+      const newSheet = { ...sheet, [address]: newCell };
+      const nextWorkbook = { ...current.workbook, Sheets: { ...current.workbook.Sheets, [sheetName]: newSheet } };
+      const nextEdits = { ...current.edits, [sheetName]: { ...(current.edits[sheetName] || {}), [address]: edit } };
+      // If a manual header was renamed, remember the new clean header name too.
+      if (isHeader) {
+        const desc = current.descriptors.find((item) => item.sheetName === sheetName);
+        const column = desc?.columns.find((item) => item.headerAddress === address);
+        if (column?.manual) {
+          const map = excelManualMapRead(); const sheetKey = excelNorm(sheetName); const newKey = excelHeaderKey(String(inputValue ?? ''), 1);
+          map[sheetKey] = { ...(map[sheetKey] || {}), [newKey]: true }; excelManualMapWrite(map);
+        }
+      }
+      excelSaveStoredEdits(current.editKey, nextEdits);
+      return { ...current, workbook: nextWorkbook, edits: nextEdits };
+    });
+  };
+
+  const downloadEdited = async () => {
+    if (!data) return;
+    setBusy(true); setError(''); setStatus('Preserving workbook package and applying edited cells…');
+    try {
+      const output = excelPatchRawWorkbook(data.rawBytes, data.workbook, data.edits);
+      const extension = /\.xlsm$/i.test(data.fileName) ? 'xlsm' : /\.xlsb$/i.test(data.fileName) ? 'xlsb' : 'xlsx';
+      if (extension === 'xlsb') throw new Error('Editing .xlsb package cells is not supported; save a copy from Excel as .xlsm or .xlsx first.');
+      const baseName = data.fileName.replace(/\.(xlsm|xlsx|xls)$/i, '');
+      const blob = new Blob([output], { type: extension === 'xlsm' ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = `${baseName}-edited.${extension}`; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+      setStatus('Edited workbook downloaded. Existing VBA, chart, pivot, and slicer package files were retained; Excel will recalculate/refresh when it opens the file.');
+    } catch (downloadError) {
+      console.error('Edited Excel export failed.', downloadError);
+      setError(`Could not export edited workbook: ${downloadError?.message || String(downloadError)}`);
+    } finally { setBusy(false); }
+  };
+
+  const selectedDescriptor = data?.descriptors.find((item) => item.sheetName === activeSheet);
+  const visibleSheets = data?.sheetNames || [];
+  return <div className="excel-viewer-overlay" role="dialog" aria-modal="true" aria-label="Excel workbook viewer">
+    <style>{`
+      .excel-viewer-overlay{position:fixed;inset:0;z-index:99999;background:#edf2f6;display:flex;flex-direction:column;color:#102d46;font-family:Arial,Helvetica,sans-serif;overflow:hidden}
+      .excel-viewer-toolbar{min-height:74px;display:flex;align-items:center;gap:12px;padding:10px 16px;background:#164967;color:#fff;border-bottom:1px solid #0b3853}
+      .excel-viewer-title{min-width:0;flex:1}.excel-viewer-title h2{margin:0 0 4px;font-size:22px;font-weight:900}.excel-viewer-title div{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#d5e5ef}
+      .excel-viewer-toolbar button,.excel-viewer-empty button{background:#fff;color:#164967;border:1px solid #c8d8e3;border-radius:7px;padding:12px 15px;font-weight:900;cursor:pointer;white-space:nowrap}
+      .excel-viewer-note{padding:8px 12px;background:#e2edf4;color:#2a465d;border-bottom:1px solid #c2d2dd;font-size:12px}
+      .excel-viewer-message{padding:8px 12px;color:#1f526b;background:#f6fafc;font-size:12px}.excel-viewer-error{padding:10px 12px;background:#fff0f0;color:#9c1c1c;font-size:13px}
+      .excel-viewer-tabs{display:flex;gap:3px;overflow-x:auto;overflow-y:hidden;padding:7px 8px 0;background:#dce5ec;border-top:1px solid #adbdc9;border-bottom:0;flex-shrink:0}
+      .excel-viewer-tab{padding:11px 13px;border:1px solid #bacbd7;border-bottom:0;border-radius:7px 7px 0 0;background:#eef4f8;color:#183b55;font-weight:800;white-space:nowrap;cursor:pointer;max-width:280px}.excel-viewer-tab.active{background:#19885b;color:white;border-color:#19885b}
+      .excel-viewer-content{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;background:#fff}.excel-viewer-empty{margin:auto;padding:35px;text-align:center;max-width:640px}.excel-viewer-empty h3{margin:0 0 8px;font-size:24px}.excel-viewer-empty p{color:#536f83;line-height:1.6}
+      .excel-sheet-toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f1f5f8;border-bottom:1px solid #c7d5df;flex-wrap:wrap}.excel-sheet-toolbar span{font-size:12px;color:#405c71}.excel-sheet-toolbar button{padding:7px 10px;border:1px solid #9bb4c5;border-radius:5px;background:#fff;color:#204862;font-weight:800;cursor:pointer}.excel-sheet-toolbar button:disabled{opacity:.45;cursor:default}.excel-sheet-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;background:#fff}
+      .excel-sheet-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;table-layout:fixed;font-size:12px}.excel-sheet-table th,.excel-sheet-table td{box-sizing:border-box;border-right:1px solid #c1cbd3;border-bottom:1px solid #c1cbd3;padding:0;min-width:44px;max-width:320px;overflow:hidden}.excel-sheet-table .excel-column-letters th{border-bottom:1px solid #a7b5c1}.excel-sheet-table .excel-row-number{width:48px;min-width:48px;max-width:48px;text-align:center;background:#edf1f5;color:#40576b;font-weight:700;border-right:1px solid #a7b5c1;padding:3px;position:sticky;left:0;z-index:35}.excel-sheet-table .excel-pinned-cell{background-clip:padding-box}.excel-sheet-table .excel-pinned-column{box-shadow:1px 0 0 #c1cbd3}
+      .excel-cell-content{display:block;width:100%;height:100%;min-height:25px;padding:4px 6px;overflow:hidden;text-overflow:clip;white-space:pre-wrap;overflow-wrap:anywhere}.excel-cell-input{display:block;width:100%;height:100%;min-height:25px;padding:3px 5px;border:0;outline:none;border-radius:0;color:inherit;font:inherit;background:transparent;text-align:inherit}.excel-cell-input:focus{outline:2px solid #2379ba;outline-offset:-2px;background:#f2f9ff}.excel-cell-input.manual-input{background:rgba(219,239,255,.42);border:1px dashed #6ba0c3}.excel-cell-checkbox{display:flex;align-items:center;justify-content:center;width:100%;min-width:35px;min-height:25px;cursor:pointer}.excel-cell-checkbox input{width:15px;height:15px;accent-color:#e00000;cursor:pointer}
+      .excel-dashboard-wrap{overflow:auto;flex:1;min-height:0;padding:14px;background:#fff}.excel-dashboard{min-width:1120px;max-width:2000px;margin:0 auto;color:#101d2a;font-family:Arial,Helvetica,sans-serif}.excel-dashboard-head{display:grid;grid-template-columns:repeat(4,118px) minmax(230px,1fr) 250px;gap:2px;align-items:stretch;margin-bottom:20px}.excel-dash-kpi{min-height:74px;background:#14627c;color:#fff;border:1px solid #09455d;border-radius:13px;padding:9px 8px;text-align:center;display:flex;flex-direction:column;justify-content:center;box-shadow:0 2px 5px #0002}.excel-dash-kpi label{font-size:14px;margin-bottom:8px}.excel-dash-kpi b{display:block;background:#fff500;color:#10202e;font-size:22px;line-height:1.15;padding:1px 4px;font-weight:900}.excel-dash-kpi.balance label{color:#4dff62}.excel-dash-title{display:flex;align-items:flex-start;padding:11px 12px;color:#0d1720;font-size:20px;white-space:nowrap}.excel-dash-logo{width:100%;height:75px;object-fit:contain;align-self:center}.excel-dash-panel{border:2px solid #111;margin:16px 0 22px}.excel-dash-panel-title{text-align:center;font-size:21px;padding:3px;background:#fff}.excel-dash-table{width:100%;border-collapse:collapse;table-layout:fixed}.excel-dash-table th{background:#47b5d8;color:#0c2639;text-decoration:underline;font-weight:500;padding:3px 4px;border:1px solid #173a4f;font-size:13px}.excel-dash-table th:last-child{background:#47ca5f}.excel-dash-table td{background:#b8e2f1;border:1px solid #173a4f;text-align:center;padding:3px 4px;font-size:15px;height:24px;color:#101820}.excel-dashboard-bottom{display:grid;grid-template-columns:minmax(580px,1fr) minmax(320px,.72fr);gap:28px;align-items:start;margin-top:32px}.excel-dash-filters{display:grid;grid-template-columns:repeat(6,minmax(78px,1fr));gap:8px;align-items:start}.excel-dash-filter:nth-child(1){grid-column:1;grid-row:1}.excel-dash-filter:nth-child(2){grid-column:2;grid-row:1}.excel-dash-filter:nth-child(3){grid-column:3;grid-row:1}.excel-dash-filter:nth-child(4){grid-column:1;grid-row:2}.excel-dash-filter:nth-child(5){grid-column:2;grid-row:2}.excel-dash-filter:nth-child(6){grid-column:3;grid-row:2}.excel-dash-filter:nth-child(7){grid-column:4;grid-row:2}.excel-dash-filter:nth-child(8){grid-column:5;grid-row:2}.excel-dash-filter:nth-child(9){grid-column:6;grid-row:2}.excel-dash-filter:nth-child(10){grid-column:2/span 2;grid-row:3}.excel-dash-filter{min-height:130px;border:1px solid #1679b6;background:#fff;padding:6px;box-shadow:0 1px 2px #0001}.excel-dash-filter h4{font-size:11px;text-transform:uppercase;margin:0 0 5px;padding:0 0 5px;border-bottom:1px solid #d5e0e7;display:flex;justify-content:space-between;gap:6px}.excel-dash-filter h4 button{font-size:10px;padding:1px 4px;border:0;color:#325b77;background:#eef5fa;cursor:pointer}.excel-dash-filter-list{max-height:160px;overflow:auto;display:grid;gap:3px;align-content:start}.excel-dash-filter-option{display:flex;align-items:center;gap:5px;background:#83c9e3;color:#102d43;border:1px solid #5ca9c9;border-radius:3px;padding:3px 4px;min-height:25px;font-size:11px;font-weight:700;text-align:left;cursor:pointer}.excel-dash-filter-option.selected{background:#8bd1e9;border-color:#459ec2}.excel-dash-filter-option input{accent-color:#196f98}.excel-dash-chart-area{display:flex;align-items:flex-start;justify-content:center;gap:26px;flex-wrap:wrap}.excel-dash-donut{width:160px;height:160px;border-radius:50%;display:grid;place-items:center;position:relative;background:conic-gradient(#00b050 var(--completion),#e0e6e9 0);border:2px solid #176083}.excel-dash-donut:before{content:'';position:absolute;width:102px;height:102px;border-radius:50%;background:#fff;border:1px solid #c9d1d8}.excel-dash-donut-inner{position:relative;z-index:1;text-align:center;color:#000}.excel-dash-donut-inner strong{display:block;font-size:23px;font-weight:500}.excel-dash-donut-inner small{display:block;margin-top:5px;color:#f04444;font-size:12px}.excel-dash-donut-inner em{font-style:normal;font-size:12px}.excel-dash-levels{min-width:170px;max-width:220px;border:1px solid #e52e48;border-radius:14px;padding:8px 9px;background:#fff}.excel-dash-levels h4{margin:0 0 6px;font-size:11px;font-weight:500}.excel-dash-level-row{display:grid;grid-template-columns:28px 1fr;gap:5px;align-items:center;margin:5px 0;font-size:11px}.excel-dash-level-bar{height:13px;background:#65c68a;color:#0e3720;padding-left:3px;white-space:nowrap;min-width:1px;font-size:10px;line-height:13px}.excel-dash-levels-footer{text-align:center;font-size:11px;font-weight:800;color:#0540ed;margin-top:5px}.excel-dash-no-data{grid-column:1/-1;text-align:center;font-size:11px;color:#61778a;padding:7px}.excel-viewer-footer{padding:7px 12px;background:#edf2f6;border-top:1px solid #c6d3dc;font-size:11px;color:#415a6d}
+      @media(max-width:800px){.excel-viewer-toolbar{flex-wrap:wrap}.excel-viewer-title{flex-basis:100%}.excel-viewer-toolbar button{padding:8px}.excel-viewer-tabs{padding-top:5px}.excel-dashboard-wrap{padding:6px}.excel-dashboard{min-width:1120px}}
+    `}</style>
+    <header className="excel-viewer-toolbar">
+      <div className="excel-viewer-title"><h2>EXCEL</h2><div>{data?.fileName || 'Connect the Isometrics Control Sheet workbook'}</div></div>
+      <button onClick={downloadEdited} disabled={!data || busy}>DOWNLOAD EDITED EXCEL</button>
+      <button onClick={onClose}>CLOSE ✕</button>
+    </header>
+    <div className="excel-viewer-note">All detected header cells are editable. Manual-editable columns are remembered by sheet and cleaned header name even when a later workbook omits “MANUAL”. The detected header row stays frozen while scrolling vertically; the first 3 worksheet columns stay frozen while scrolling horizontally. Edits are saved in this browser. Workbook contents are processed locally, not uploaded.</div>
+    {status ? <div className="excel-viewer-message">{status}</div> : null}
+    {error ? <div className="excel-viewer-error">{error}</div> : null}
+    {!data ? <div className="excel-viewer-content"><div className="excel-viewer-empty"><h3>{busy ? 'Opening workbook…' : 'Open the Isometrics Excel workbook'}</h3><p>Choose the .xlsm workbook whose filename starts with 4193_HH_Isometrics Control Sheet-Piping_OFSI. A numeric suffix after OFSI is accepted. It is read locally in this browser.</p><button onClick={() => fileInputRef.current?.click()} disabled={busy}>CHOOSE EXCEL WORKBOOK</button><input ref={fileInputRef} type="file" accept=".xlsm,.xlsx" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; loadWorkbook(file); }}/></div></div> : <>
+      <div className="excel-viewer-content">
+        {activeSheet === 'Dashboard' && !gridDashboard ? <><div className="excel-sheet-toolbar"><span>Dashboard preview rebuilt from the connected workbook's ISO data.</span><button onClick={() => setGridDashboard(true)}>WORKSHEET GRID</button><button onClick={() => { setGridDashboard(false); setStatus('Dashboard values refreshed from workbook cells.'); }}>REFRESH DASHBOARD</button></div><ExcelDashboardReplica key={`${data.fileName}:${data.lastModified}`} data={data} /></> : selectedDescriptor ? <ExcelSheetGrid key={`${data.fileName}:${activeSheet}`} descriptor={selectedDescriptor} workbook={data.workbook} onCellChange={updateCell} onBackDashboard={activeSheet === 'Dashboard' ? () => setGridDashboard(false) : null} /> : <div className="excel-viewer-empty"><h3>Sheet not available</h3></div>}
+      </div>
+      <nav className="excel-viewer-tabs" aria-label="Workbook worksheets">{visibleSheets.map((name) => <button key={name} className={`excel-viewer-tab${name === activeSheet ? ' active' : ''}`} title={name} onClick={() => { setActiveSheet(name); setGridDashboard(false); }}>{name}</button>)}<button className="excel-viewer-tab" onClick={() => fileInputRef.current?.click()}>+ OPEN OTHER COPY</button><input ref={fileInputRef} type="file" accept=".xlsm,.xlsx" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) loadWorkbook(file); }}/></nav>
+      <footer className="excel-viewer-footer">{data.sheetNames.length} worksheets · {data.fileSize.toLocaleString()} bytes · {data.fileName.endsWith('.xlsm') ? 'Macro-enabled workbook; VBA package is retained when exporting edits.' : 'Workbook read locally.'} · Editing is limited to headers and saved manual columns.</footer>
+    </>}
+  </div>;
+}
+
+function ExcelSheetGrid({ descriptor, workbook, onCellChange, onBackDashboard }) {
+  const { sheetName, sheet, range, headerRow, columns } = descriptor;
+  const [page, setPage] = useState(0);
+  const [findText, setFindText] = useState('');
+  const [jumpCell, setJumpCell] = useState('');
+  const perPage = 180;
+  const frozenRows = [headerRow].filter((r) => r >= range.s.r && r <= range.e.r);
+  const frozenColumnEnd = Math.min(range.e.c, range.s.c + 2);
+  const frozenColumnOffset = (col) => 48 + Array.from({ length: Math.max(0, col - range.s.c) }, (_, index) => excelColumnWidth(sheet, range.s.c + index)).reduce((sum, width) => sum + width, 0);
+  const bodyRows = useMemo(() => {
+    const all = [];
+    for (let row = range.s.r; row <= range.e.r; row += 1) if (row !== headerRow) all.push(row);
+    return all;
+  }, [range.s.r, range.e.r, headerRow, sheetName]);
+  const pageCount = Math.max(1, Math.ceil(bodyRows.length / perPage));
+  const pageRows = bodyRows.slice(page * perPage, (page + 1) * perPage);
+  const frozenOffset = (row) => frozenRows.filter((item) => item < row).reduce((sum, item) => sum + excelRowHeight(sheet, item), 0);
+  const columnTitle = (col) => columns.find((item) => item.col === col)?.name || '';
+  const rowsForFind = useMemo(() => {
+    const term = findText.trim().toLowerCase();
+    if (!term) return [];
+    const matches = [];
+    for (let row = range.s.r; row <= range.e.r && matches.length < 500; row += 1) {
+      for (let col = range.s.c; col <= range.e.c; col += 1) {
+        const cell = excelCell(sheet, row, col); const shown = String(excelCellRawValue(cell)).toLowerCase();
+        if (shown.includes(term)) { matches.push({ row, col, address: excelCellAddress(row, col), value: excelCellRawValue(cell) }); break; }
+      }
+    }
+    return matches;
+  }, [findText, sheet, range.s.r, range.s.c, range.e.r, range.e.c]);
+  const jumpToAddress = () => {
+    const match = /^([A-Z]+)(\d+)$/i.exec(jumpCell.trim());
+    if (!match) return;
+    const parts = excelA1Parts(jumpCell.trim().toUpperCase());
+    const rowIndex = parts.row - 1;
+    const bodyIndex = bodyRows.indexOf(rowIndex);
+    if (bodyIndex >= 0) setPage(Math.floor(bodyIndex / perPage));
+    setTimeout(() => document.getElementById(`excel-cell-${sheetName}-${jumpCell.trim().toUpperCase()}`)?.scrollIntoView({ block: 'center', inline: 'center' }), 80);
+  };
+  const renderCell = (row, col, pinned = false) => {
+    const address = excelCellAddress(row, col);
+    const cell = excelCell(sheet, row, col);
+    const column = columns.find((item) => item.col === col);
+    const isHeader = row === headerRow;
+    const isEditable = isHeader || Boolean(column?.manual);
+    const rawValue = cell?.v instanceof Date ? cell.v.toISOString().slice(0, 10) : (isHeader ? excelCleanHeader(cell?.v ?? '') : excelCellRawValue(cell));
+    const merged = excelMergeInfo(sheet, row, col);
+    if (merged.skip) return null;
+    const css = { ...excelCellCss(cell, isHeader), width: excelColumnWidth(sheet, col), minWidth: excelColumnWidth(sheet, col), height: excelRowHeight(sheet, row) };
+    const frozenColumn = col <= frozenColumnEnd;
+    if (pinned) { css.position = 'sticky'; css.top = 24; css.zIndex = frozenColumn ? 60 : 30; }
+    else if (frozenColumn) { css.position = 'sticky'; css.left = frozenColumnOffset(col); css.zIndex = 25; }
+    if (frozenColumn) css.left = frozenColumnOffset(col);
+    const cellText = rawValue === null || rawValue === undefined ? '' : String(rawValue);
+    let control = <span className="excel-cell-content">{cellText}</span>;
+    const booleanLike = cell?.t === 'b' || /^(true|false|yes|no|checked|unchecked)$/i.test(String(cell?.v ?? '').trim()) || (column?.manual && /^(0|1)$/.test(String(cell?.v ?? '').trim()));
+    const checkboxColumn = !isHeader && isEditable && (excelColumnBoolean(column?.name) || booleanLike);
+    if (checkboxColumn) {
+      control = <label className="excel-cell-checkbox" title={`${address} · ${column?.name || ''}`}><input type="checkbox" checked={excelBooleanValue(cell?.v)} onChange={(event) => onCellChange(sheetName, address, event.target.checked, false, true)} aria-label={`${column?.name} ${address}`}/></label>;
+    } else if (isEditable) {
+      control = <input className={`excel-cell-input${column?.manual && !isHeader ? ' manual-input' : ''}`} value={cellText} onChange={(event) => onCellChange(sheetName, address, event.target.value, isHeader, false)} title={`${address}${column?.manual ? ' · manual-editable' : isHeader ? ' · editable header' : ''}`} aria-label={`${sheetName} ${address}`} />;
+    }
+    const Tag = isHeader ? 'th' : 'td';
+    return <Tag id={`excel-cell-${sheetName}-${address}`} key={address} colSpan={merged.colSpan || 1} rowSpan={merged.rowSpan || 1} style={css} className={pinned ? 'excel-pinned-cell' : ''}><div style={{ minHeight: css.height, width: '100%', height: '100%', display: 'flex', alignItems: 'stretch' }}>{control}</div></Tag>;
+  };
+  const renderRow = (row, pinned) => <tr key={`${row}-${pinned ? 'h' : 'b'}`} style={{ height: excelRowHeight(sheet, row) }}><th className="excel-row-number" style={pinned ? { position: 'sticky', left: 0, top: 24, zIndex: 70, height: excelRowHeight(sheet, row) } : { height: excelRowHeight(sheet, row) }}>{row + 1}</th>{Array.from({ length: range.e.c - range.s.c + 1 }, (_, index) => renderCell(row, range.s.c + index, pinned))}</tr>;
+  return <>
+    <div className="excel-sheet-toolbar"><span><b>{sheetName}</b> · range {sheet['!ref'] || 'A1'} · header row {headerRow + 1} · page {page + 1} of {pageCount} · {bodyRows.length} rows available</span>{onBackDashboard ? <button onClick={onBackDashboard}>DASHBOARD VIEW</button> : null}<label>Find <input value={findText} onChange={(event) => { setFindText(event.target.value); setPage(0); }} style={{ width: 145, padding: 5, border: '1px solid #9bb4c5', borderRadius: 4 }} placeholder="Search sheet" /></label><label>Cell <input value={jumpCell} onChange={(event) => setJumpCell(event.target.value.toUpperCase())} style={{ width: 75, padding: 5, border: '1px solid #9bb4c5', borderRadius: 4 }} placeholder="A1" /></label><button onClick={jumpToAddress}>GO</button><button disabled={page <= 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>◀ PREVIOUS</button><button disabled={page >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>NEXT ▶</button></div>
+    {rowsForFind.length ? <div className="excel-viewer-message">Search results: {rowsForFind.slice(0, 10).map((item) => <button key={item.address} onClick={() => { setJumpCell(item.address); const idx = bodyRows.indexOf(item.row); if (idx >= 0) setPage(Math.floor(idx / perPage)); setTimeout(() => document.getElementById(`excel-cell-${sheetName}-${item.address}`)?.scrollIntoView({ block: 'center', inline: 'center' }), 80); }} style={{ margin: '0 5px', padding: '3px 7px', border: '1px solid #9bb4c5', background: '#fff', borderRadius: 4, cursor: 'pointer' }}>{item.address}: {String(item.value).slice(0, 40)}</button>)}</div> : null}
+    <div className="excel-sheet-scroll"><table className="excel-sheet-table"><colgroup><col style={{ width: 48 }} />{Array.from({ length: range.e.c - range.s.c + 1 }, (_, index) => <col key={index} style={{ width: excelColumnWidth(sheet, range.s.c + index) }} />)}</colgroup><thead><tr className="excel-column-letters" style={{ height: 24 }}><th className="excel-row-number" style={{ position: 'sticky', top: 0, left: 0, zIndex: 80, height: 24 }}></th>{Array.from({ length: range.e.c - range.s.c + 1 }, (_, index) => { const col = range.s.c + index; const frozen = col <= frozenColumnEnd; return <th key={index} className={frozen ? 'excel-pinned-column' : ''} style={{ position: 'sticky', top: 0, left: frozen ? frozenColumnOffset(col) : undefined, zIndex: frozen ? 75 : 30, height: 24, width: excelColumnWidth(sheet, col), minWidth: excelColumnWidth(sheet, col), background: '#e8eef3', color: '#43586a', textAlign: 'center', fontWeight: 800 }}>{XLSX.utils.encode_col(col)}</th>; })}</tr>{frozenRows.map((row) => renderRow(row, true))}</thead><tbody>{pageRows.map((row) => renderRow(row, false))}</tbody></table></div>
+  </>;
+}
+
+function ExcelDashboardReplica({ data }) {
+  const mainName = data.sheetNames.find((name) => excelNorm(name) === excelNorm(EXCEL_MAIN_SHEET_NAME));
+  const mainSheet = mainName ? data.workbook.Sheets[mainName] : null;
+  const mainDescriptor = data.descriptors.find((item) => item.sheetName === mainName);
+  const allRecords = useMemo(() => {
+    if (!mainSheet || !mainDescriptor) return [];
+    const { range } = mainDescriptor;
+    const headers = new Map(mainDescriptor.columns.map((col) => [col.col, excelNorm(col.name)]));
+    const findCol = (aliases) => {
+      const matches = mainDescriptor.columns.filter((col) => aliases.some((alias) => headers.get(col.col) === alias || headers.get(col.col)?.startsWith(alias)));
+      if (!matches.length) return -1;
+      return matches.sort((a, b) => (headers.get(a.col).length - headers.get(b.col).length))[0].col;
+    };
+    const cols = {
+      module: findCol(['module']), pipe: findCol(['pipename']), size: findCol(['size']), spec: findCol(['spec']), priority: findCol(['priority']), level: findCol(['level']), service: findCol(['service']), steps: findCol(['stepscompleted', 'steps']), material: findCol(['materialcategory', 'material']), yard: findCol(['moduleyard']), hold: findCol(['hold']), revision: findCol(['latestrevision']), issued: findCol(['issuedtocp']),
+      stages: EXCEL_DASH_STAGES.map((stage) => findCol(stage.aliases)),
+    };
+    const valueAt = (row, col) => col < 0 ? '' : (excelCell(mainSheet, row, col)?.v ?? '');
+    const records = [];
+    for (let row = Math.max(range.s.r, mainDescriptor.headerRow + 1); row <= range.e.r; row += 1) {
+      const values = [];
+      for (let col = range.s.c; col <= range.e.c; col += 1) values.push(excelCell(mainSheet, row, col)?.v ?? '');
+      const module = String(valueAt(row, cols.module) ?? '').trim();
+      const pipe = String(valueAt(row, cols.pipe) ?? '').trim();
+      const rowText = values.filter((value) => value !== null && value !== undefined).join(' ');
+      const deleted = /line[\s_-]*delet(?:ed|e|ion)\b/i.test(rowText);
+      const dataHasAny = values.some((value) => value !== '' && value !== null && value !== undefined);
+      if (!dataHasAny || (!module && !pipe && !deleted)) continue;
+      const raw = {
+        row, module, pipe, size: String(valueAt(row, cols.size) ?? '').trim(), spec: String(valueAt(row, cols.spec) ?? '').trim(),
+        priority: String(valueAt(row, cols.priority) ?? '').trim(), level: String(valueAt(row, cols.level) ?? '').trim(), service: String(valueAt(row, cols.service) ?? '').trim(),
+        steps: String(valueAt(row, cols.steps) ?? '').trim(), material: String(valueAt(row, cols.material) ?? '').trim(), yard: String(valueAt(row, cols.yard) ?? '').trim(),
+        hold: deleted ? 'Line Deleted' : String(valueAt(row, cols.hold) ?? '').trim(), deleted,
+        issued: excelBooleanValue(valueAt(row, cols.issued)), revision: valueAt(row, cols.revision),
+        stages: cols.stages.map((col) => excelBooleanValue(valueAt(row, col))),
+      };
+      raw.validIso = Boolean(pipe) && !deleted;
+      records.push(raw);
+    }
+    return records;
+  }, [mainSheet, mainDescriptor, data.workbook]);
+  const filterOptions = useMemo(() => EXCEL_DASH_FILTERS.map((filter) => {
+    const recordKey = filter.aliases[0] === 'materialcategory' ? 'material' : filter.aliases[0] === 'moduleyard' ? 'yard' : filter.aliases[0] === 'stepscompleted' ? 'steps' : filter.aliases[0];
+    const values = [...new Set(allRecords.map((record) => String(record[recordKey] ?? '').trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    return { ...filter, values };
+  }), [allRecords]);
+  const [selectedFilters, setSelectedFilters] = useState({});
+  useEffect(() => { setSelectedFilters({}); }, [data.fileName, data.lastModified]);
+  const filteredRecords = useMemo(() => allRecords.filter((record) => filterOptions.every((filter) => {
+    const selected = selectedFilters[filter.label];
+    if (selected === undefined || !filter.values.length || selected.length === filter.values.length) return true;
+    if (!selected.length) return false;
+    const key = filter.label === 'STEPS COMPLETED' ? 'steps' : filter.label === 'MATERIAL' ? 'material' : filter.label === 'MODULE YARD' ? 'yard' : filter.label.toLowerCase();
+    return selected.includes(String(record[key] ?? '').trim());
+  })), [allRecords, filterOptions, selectedFilters]);
+  const validRows = filteredRecords.filter((record) => record.validIso);
+  const total = validRows.length;
+  const issued = validRows.filter((record) => record.issued).length;
+  const holds = validRows.filter((record) => record.hold && !['no', 'false', '0'].includes(record.hold.toLowerCase())).length;
+  const balance = Math.max(0, total - issued - holds);
+  const stageCounts = EXCEL_DASH_STAGES.map((_, stageIndex) => validRows.filter((record) => record.stages[stageIndex]).length);
+  const available = stageCounts.map((count, index) => Math.max(0, index === 0 ? total - count : stageCounts[index - 1] - count));
+  const revisionCount = validRows.filter((record) => {
+    const value = record.revision;
+    return value !== '' && value !== null && value !== undefined && value !== 0 && value !== '0' && value !== false;
+  }).length;
+  const issuedPercent = total ? Math.min(100, (issued / total) * 100) : 0;
+  const revisionPercent = total ? (revisionCount / total) * 100 : 0;
+  const levelRows = ['L4', 'L3', 'L2', 'L1'].map((level) => {
+    const rows = validRows.filter((record) => record.level.toUpperCase() === level);
+    const done = rows.filter((record) => record.issued).length;
+    return { level, value: rows.length ? Math.round((done / rows.length) * 100) : 0, total: rows.length };
+  });
+  const toggleFilter = (label, value, values) => setSelectedFilters((current) => {
+    const list = current[label] === undefined ? [...values] : current[label];
+    return { ...current, [label]: list.includes(value) ? list.filter((item) => item !== value) : [...list, value] };
+  });
+  const clearFilter = (label) => setSelectedFilters((current) => { const next = { ...current }; delete next[label]; return next; });
+  return <div className="excel-dashboard-wrap"><div className="excel-dashboard">
+    <div className="excel-dashboard-head">
+      <div className="excel-dash-kpi"><label>TOTAL ISO</label><b>{total}</b></div><div className="excel-dash-kpi"><label>ISSUED</label><b>{issued}</b></div><div className="excel-dash-kpi"><label>HOLD</label><b>{holds}</b></div><div className="excel-dash-kpi balance"><label>BALANCE<br/><small>HOLD FREE</small></label><b>{balance}</b></div>
+      <div className="excel-dash-title">4193 HH_ISOMERTIC STATUS</div>{data.logoUrl ? <img className="excel-dash-logo" src={data.logoUrl} alt="Workbook logo"/> : <strong className="excel-dash-logo" style={{ display: 'grid', placeItems: 'center', fontSize: 28 }}>MODEC</strong>}
+    </div>
+    <div className="excel-dash-panel"><div className="excel-dash-panel-title">COMPLETED</div><table className="excel-dash-table"><thead><tr>{EXCEL_DASH_STAGES.map((stage) => <th key={stage.label}>{stage.label}</th>)}</tr></thead><tbody><tr>{stageCounts.map((count, index) => <td key={EXCEL_DASH_STAGES[index].label}>{count}</td>)}</tr></tbody></table></div>
+    <div className="excel-dash-panel"><div className="excel-dash-panel-title">WORK FRONT AVAILABLE</div><table className="excel-dash-table"><thead><tr>{EXCEL_DASH_STAGES.map((stage) => <th key={stage.label}>{stage.label}</th>)}</tr></thead><tbody><tr>{available.map((count, index) => <td key={EXCEL_DASH_STAGES[index].label}>{count}</td>)}</tr></tbody></table></div>
+    <div className="excel-dashboard-bottom"><div className="excel-dash-filters">{filterOptions.map((filter) => <section className="excel-dash-filter" key={filter.label}><h4>{filter.label}<button onClick={() => clearFilter(filter.label)} title="Clear filter">CLEAR</button></h4><div className="excel-dash-filter-list">{filter.values.length ? filter.values.map((value) => { const chosen = selectedFilters[filter.label] === undefined || selectedFilters[filter.label].includes(value); return <button type="button" key={value} className={`excel-dash-filter-option${chosen ? ' selected' : ''}`} onClick={() => toggleFilter(filter.label, value, filter.values)}><input type="checkbox" checked={chosen} readOnly tabIndex={-1}/><span>{value}</span></button>; }) : <div className="excel-dash-no-data">No values in cleaned workbook</div>}</div></section>)}</div>
+      <div className="excel-dash-chart-area"><div className="excel-dash-donut" style={{ '--completion': `${issuedPercent}%` }}><div className="excel-dash-donut-inner"><strong>{issuedPercent.toFixed(2)}%</strong><small>Revision</small><em>{revisionPercent.toFixed(2)}%</em></div></div><section className="excel-dash-levels"><h4>L4 -</h4>{levelRows.map((row) => <div className="excel-dash-level-row" key={row.level}><span>{row.level}</span><div className="excel-dash-level-bar" style={{ width: `${row.value}%` }}>{row.total ? `${row.value}%` : ''}</div></div>)}<div className="excel-dash-levels-footer">IFC Issued</div></section></div>
+    </div>
+    <div className="excel-viewer-message">Dashboard is recalculated from the rows in <b>{EXCEL_MAIN_SHEET_NAME}</b>. {total ? `${total} non-deleted ISO rows are currently included by these filters.` : 'No identifiable ISO rows are present in the uploaded cleaned workbook, so the counts are zero. Upload the workbook copy containing the data you are authorized to use to populate the dashboard.'}</div>
+  </div></div>;
+}
+
 
 function Layout({ title, sub, back, children }) {
   return <main className="page"><header className="top"><button onClick={back}>Back</button><div><p>REPORTS GENERATE TOOLS</p><h1>{title}</h1><span>{sub}</span></div></header><section className="content">{children}</section></main>;

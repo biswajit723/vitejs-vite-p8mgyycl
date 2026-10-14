@@ -1,0 +1,11 @@
+Excel Viewer UI-only update
+
+Changes:
+1. Worksheet tabs moved to the bottom of the viewer, below the sheet/dashboard content.
+2. Detected header row remains sticky while scrolling vertically.
+3. First three worksheet columns remain sticky while scrolling horizontally.
+4. Manual-editable cells with boolean values / checkbox-style workflow render checkbox controls; stage and issued-to-CP columns remain checkbox-enabled.
+5. Existing workbook parsing, dashboard, reports and other app logic were not intentionally changed in this update.
+
+Build verification limitation:
+The JSX edits were made in the project source, but a full Vite build could not be run in this environment because Vite dependencies were unavailable. Run `npm run build` in the user's project before committing.
