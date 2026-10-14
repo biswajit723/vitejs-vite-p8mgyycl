@@ -238,7 +238,12 @@ function buildIsoPlanningData(workbooks) {
   return [...moduleRows.values()].sort((a, b) => a.moduleName.localeCompare(b.moduleName, undefined, { numeric: true, sensitivity: 'base' }));
 }
 function parseIsoForecastDate(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    // SheetJS (cellDates) can return an Excel date a few seconds BEFORE local midnight (e.g. India timezone),
+    // which pushes the 1st of a month into the previous month. Adding 12 hours snaps it to the correct day.
+    const snapped = new Date(value.getTime() + 12 * 60 * 60 * 1000);
+    return new Date(snapped.getFullYear(), snapped.getMonth(), snapped.getDate());
+  }
   if (typeof value === 'number' && value > 1 && value < 100000) {
     const parsed = XLSX.SSF.parse_date_code(value);
     return parsed ? new Date(parsed.y, parsed.m - 1, parsed.d) : null;
@@ -356,18 +361,31 @@ const ISO_FORECAST_SHEET_NAME = 'HH_TOPSIDE_OVERALL_CS_OFSI';
 function isIsoCellStruck(cell, workbook) {
   const style = cell?.s;
   if (!style) return false;
-  const font = style.font || style.Font || workbook?.Styles?.Fonts?.[style.fontId] || {};
-  const strike = font.strike ?? font.strikeout ?? font.strikeThrough;
-  return strike === true || strike === 1 || strike === '1' || normalize(strike) === 'true';
+  const fonts = workbook?.Styles?.Fonts;
+  const candidates = [style.font, style.Font, fonts?.[style.fontId], fonts?.[style.fontid]];
+  return candidates.some((font) => {
+    if (!font) return false;
+    const strike = font.strike ?? font.strikeout ?? font.strikeThrough;
+    return strike === true || strike === 1 || strike === '1' || normalize(strike) === 'true';
+  });
 }
 // Reads ONLY the HH_TOPSIDE_OVERALL_CS_OFSI sheet and groups dated FORECAST ISSUE DATE rows by module.
+// Also keeps an audit (window.isoAudit('M1C')) that shows what was counted / skipped and why.
 function buildIsoForecastMap(workbooks) {
   const map = new Map();
+  const audit = new Map();
   const targetName = normalize(ISO_FORECAST_SHEET_NAME);
   let sheetFound = false;
+  const bump = (key, name, field) => {
+    if (!audit.has(key)) audit.set(key, { module: name, counted: 0, lineDeleted: 0, struck: 0, noDate: 0, hiddenRowCounted: 0, duplicatePipeCounted: 0, seen: new Set() });
+    return audit.get(key);
+  };
+  const hasNamedSheet = (workbooks || []).some((entry) => (entry.sheets || []).some((sheetEntry) => normalize(sheetEntry.sheetName) === targetName));
   for (const workbookEntry of workbooks || []) {
     for (const sheetEntry of workbookEntry.sheets || []) {
-      if (normalize(sheetEntry.sheetName) !== targetName) continue;
+      // Normal case: only the named sheet. Fallback (only when that sheet exists nowhere): ISO workbook with a single sheet.
+      const isSingleSheetFallback = !hasNamedSheet && isIsoPlanningWorkbook(workbookEntry) && (workbookEntry.sheets || []).length === 1;
+      if (normalize(sheetEntry.sheetName) !== targetName && !isSingleSheetFallback) continue;
       sheetFound = true;
       const rows = sheetEntry.rows || [];
       let headerRowIndex = -1;
@@ -380,30 +398,51 @@ function buildIsoForecastMap(workbooks) {
       const headerRow = rows[headerRowIndex] ?? [];
       const moduleColumn = headerRow.findIndex(isModuleHeader);
       const pipeColumn = findColumnByAliases(headerRow, ISO_PIPE_ALIASES);
-      const holdColumn = findColumnByAliases(headerRow, ISO_HOLD_ALIASES);
+      let holdColumn = findColumnByAliases(headerRow, ISO_HOLD_ALIASES);
+      if (holdColumn < 0) holdColumn = headerRow.findIndex((value) => { const n = normalize(value); return n.startsWith('hold') && !n.includes('removal'); });
+      const realRowOf = (rowIndex) => sheetEntry.sourceRowIndexes?.[rowIndex] ?? rowIndex;
       const dataCell = (rowIndex, column) => {
         if (column < 0) return null;
-        const realRow = sheetEntry.sourceRowIndexes?.[rowIndex] ?? rowIndex;
+        const realRow = realRowOf(rowIndex);
         return sheetEntry.sheet?.['!data']?.[realRow]?.[column] || sheetEntry.sheet?.[XLSX.utils.encode_cell({ r: realRow, c: column })] || null;
       };
       for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
         const row = rows[rowIndex] ?? [];
         const moduleName = String(moduleColumn >= 0 ? row[moduleColumn] ?? '' : '').trim() || (pipeColumn >= 0 ? isoModuleFromPipeName(row[pipeColumn]) : '');
         if (!moduleName) continue;
+        const key = normalize(moduleName);
+        const stats = bump(key, moduleName);
         // LINE DELETED / DELETE LINE text anywhere in the row -> not counted.
         const deleteMarkers = ['linedeleted', 'linedelete', 'deletedline', 'deleteline'];
-        if (row.some((value) => { const text = normalize(value); return text && deleteMarkers.some((marker) => text.includes(marker)); })) continue;
+        if (row.some((value) => { const text = normalize(value); return text && deleteMarkers.some((marker) => text.includes(marker)); })) { stats.lineDeleted += 1; continue; }
         // Strike-through forecast / pipe / module cell -> not counted.
-        if ([forecastColumn, pipeColumn, moduleColumn].some((column) => isIsoCellStruck(dataCell(rowIndex, column), workbookEntry.workbook))) continue;
+        if ([forecastColumn, pipeColumn, moduleColumn].some((column) => isIsoCellStruck(dataCell(rowIndex, column), workbookEntry.workbook))) { stats.struck += 1; continue; }
         const date = parseIsoForecastDate(row[forecastColumn]);
-        if (!date) continue;
-        const key = normalize(moduleName);
+        if (!date) { stats.noDate += 1; continue; }
+        stats.counted += 1;
+        if (sheetEntry.sheet?.['!rows']?.[realRowOf(rowIndex)]?.hidden) stats.hiddenRowCounted += 1;
+        const pipeKey = pipeColumn >= 0 ? normalize(row[pipeColumn]) : '';
+        if (pipeKey) { if (stats.seen.has(pipeKey)) stats.duplicatePipeCounted += 1; stats.seen.add(pipeKey); }
         if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ date, hold: holdColumn >= 0 && isHoldValue(row[holdColumn]) });
+        map.get(key).push({ date, hold: holdColumn >= 0 && isHoldValue(row[holdColumn]), pipe: pipeColumn >= 0 ? String(row[pipeColumn] ?? '') : '', excelRow: realRowOf(rowIndex) + 1 });
       }
     }
   }
   if (!sheetFound) console.warn('Sheet ' + ISO_FORECAST_SHEET_NAME + ' not found in the connected Excel files.');
+  if (typeof window !== 'undefined') {
+    // Usage in browser console:  isoAudit('M1C')
+    window.isoAudit = (moduleName) => {
+      const key = normalize(moduleName);
+      const stats = audit.get(key);
+      const items = map.get(key) || [];
+      const byMonth = {};
+      items.forEach((item) => { const k = item.date.getFullYear() + '-' + String(item.date.getMonth() + 1).padStart(2, '0'); byMonth[k] = (byMonth[k] || 0) + 1; });
+      console.log('Sheet:', ISO_FORECAST_SHEET_NAME, '| module:', moduleName);
+      if (stats) console.table({ counted: stats.counted, lineDeletedSkipped: stats.lineDeleted, struckSkipped: stats.struck, noDateSkipped: stats.noDate, countedButHiddenRow: stats.hiddenRowCounted, countedDuplicatePipeName: stats.duplicatePipeCounted });
+      console.table(byMonth);
+      return items.slice(0, 5).map((item) => ({ excelRow: item.excelRow, pipe: item.pipe, date: item.date.toDateString() }));
+    };
+  }
   return map;
 }
 
