@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
@@ -1623,6 +1623,7 @@ function IsoPlanningDashboardPage({ workbooks, back, openExcel }) {
   };
   const openAnalytics = () => setBlankToolPage('ANALYTICS');
   const openRevision = () => setBlankToolPage('REVISION');
+  if (blankToolPage === 'EXCEL') return <RgtExcelSheet onBack={() => setBlankToolPage(null)} />;
   if (blankToolPage) {
     return <Layout title={blankToolPage} sub="ISO Planning and Management · Project 4193" back={() => setBlankToolPage(null)}>
       <style>{`
@@ -2011,6 +2012,175 @@ function excelFormatEditValue(value, cell, headerCell = false) {
   return { value: text, type: 's' };
 }
 
+
+const RGT_EXCEL_HEADERS = [
+  'SI.N.', 'MODULE', 'PIPENAME', 'SPEC', 'SERVICE', 'SIZE', 'SYS NO.', 'PRIORITY (MANUAL)',
+  'MISCELLANEOUS HOLDS (MANUAL)', 'Module Yard (MANUAL)', 'Material Category',
+  'Latest Revision (MANUAL DRP DOWN)', 'Pipe Inch Meter (as of MTO 3.0)', 'ISO BATCH (MANUAL)',
+  'ISO EXTRACTION (MANUAL)', 'LAYOUT CHECK (MANUAL)', 'STRESS CHECK (MANUAL)',
+  'SUPPORT CHECK (MANUAL)', 'BACK DRAFT (MANUAL)', 'BACK CHECK (MANUAL)', 'QC CHECK (MANUAL)',
+  'MODULE ENGINEER CHECK (MANUAL)', 'TO CP', 'STEPS COMPLETED', 'Issued to CP = 7982', 'LEVEL',
+  "ACTUAL PLANNED ISO'S by Area Lead (MANUAL)", 'HOLD (DROPDOWN)', 'PIC FOR HOLD REMOVAL (MANUAL)',
+  'PIC-HOLD REMOVAL DATE (MANUAL)', 'PIC - FEED BACK (MANUAL)', 'FORECAST ISSUE DATE (MANUAL)',
+  'REVISED PLANNING WEEK- BOMESC-ROS (MANUAL)', 'DOCUMENTUM CP STATUS', 'New Planning-DO NOT DELETED',
+  'Category (MANUAL)', 'Fab Impact (MANUAL)', 'AE APPROVAL (MANUAL-DROP DOWN)',
+  'DLE APPROVAL (MANUAL-DROP DOWN)', 'DATE (MANUAL)', 'RLM (MANUAL)',
+  'Reason for Fab Hold/Pre-Issue (MANUAL)', 'ISO Revision Date (MANUAL)', 'ISO RLM Number (MANUAL)',
+  'RLM issued Date (MANUAL)', 'ISO Revision/RLM Status (MANUAL)',
+  'Changes Due to External/Internal-Piping (MANUAL)', 'ISO Revision (MANUAL)',
+  'Target dates (MANUAL)', 'Inch Dia - Revised'
+];
+const RGT_EXCEL_MANUAL_COLUMNS = new Set([7,8,9,11,13,14,15,16,17,18,19,20,21,26,28,29,30,31,32,35,36,37,38,39,40,41,42,43,44,45,46,47,48]);
+
+const RGT_EXCEL_CHECKBOX_HEADER_NAMES = new Set([
+  'ISO EXTRACTION', 'LAYOUT CHECK', 'STRESS CHECK', 'SUPPORT CHECK',
+  'BACK DRAFT', 'BACK CHECK', 'QC CHECK', 'MODULE ENGINEER CHECK', 'TO CP'
+]);
+const rgtIsCheckboxHeader = (value) => RGT_EXCEL_CHECKBOX_HEADER_NAMES.has(String(value || '').trim().toUpperCase());
+const rgtCleanExcelHeader = (value) => value
+  .replace(/\s*\(\s*MANUAL(?:\s*-?\s*DROP\s*DOWN)?\s*\)/gi, '')
+  .replace(/\s*\(\s*MANUAL\s+DRP\s+DOWN\s*\)/gi, '')
+  .replace(/\s*\(\s*MANUAL\s*\)/gi, '')
+  .replace(/\s+by Area Lead\s*$/i, ' by Area Lead')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+
+const RGT_EXCEL_HEADER_COLORS = [
+  '#ffffff','#b7b7b7','#ffffff','#d9d9d9','#d9d9d9','#d9d9d9','#7f7f7f','#d9d9d9','#ffffff','#fff200','#fff200','#7f7f7f','#d9d9d9','#ffffff',
+  '#43b1d0','#43b1d0','#43b1d0','#43b1d0','#43b1d0','#43b1d0','#43b1d0',
+  '#43b1d0','#45d36b','#43b1d0','#43b1d0','#fff200','#fff200','#d9d9d9','#d9ead3','#d9ead3',
+  '#d9ead3','#d9ead3','#8bd047','#d9ead3','#ffffff',
+  '#ffffff','#ffffff','#fff200','#fff200','#fff200','#fff200','#fff200','#1788b5','#1788b5','#1788b5','#fff200','#1788b5','#1788b5','#1788b5','#ffffff'
+];
+const RGT_EXCEL_HEADER_COLOR_CSS = RGT_EXCEL_HEADER_COLORS.map((color,index) => '.rgt-x-color-' + index + '{background:' + color + '}').join('');
+function rgtExcelColumn(index) {
+  let number = index + 1, name = '';
+  while (number) { number--; name = String.fromCharCode(65 + number % 26) + name; number = Math.floor(number / 26); }
+  return name;
+}
+function RgtExcelSheet({ onBack }) {
+  const [headers, setHeaders] = useState(() => RGT_EXCEL_HEADERS.map(rgtCleanExcelHeader));
+  const [columnIds, setColumnIds] = useState(() => RGT_EXCEL_HEADERS.map((_, index) => 'base-' + index));
+  const [manualColumnIds, setManualColumnIds] = useState(() => new Set(Array.from(RGT_EXCEL_MANUAL_COLUMNS, (index) => 'base-' + index)));
+  const [nextColumnNumber, setNextColumnNumber] = useState(1);
+  const [cells, setCells] = useState({});
+  const [selectedColumn, setSelectedColumn] = useState(null);
+  const [columnContextMenu, setColumnContextMenu] = useState(null);
+  const [contextMenuSearch, setContextMenuSearch] = useState('');
+  const [columnClipboard, setColumnClipboard] = useState(null);
+  const [columnWidths, setColumnWidths] = useState({});
+  const [hiddenColumns, setHiddenColumns] = useState(new Set());
+  const [columnFormats, setColumnFormats] = useState({});
+  const [menu, setMenu] = useState(null);
+  const [filterSearch, setFilterSearch] = useState('');
+  const [selectedValues, setSelectedValues] = useState(null);
+  const [filters, setFilters] = useState({});
+  const [sortState, setSortState] = useState(null);
+  const [rows, setRows] = useState(200);
+  const loadMoreRows = (event) => {
+    const element = event.currentTarget;
+    if (element.scrollTop + element.clientHeight >= element.scrollHeight - 500) setRows((current) => current + 200);
+  };
+  const sectionClass = (index) => 'rgt-x-color-' + index;
+  const valueAt = (row, column) => cells[row + ':' + column] || '';
+  const isManualColumn = (column) => manualColumnIds.has(columnIds[column]);
+  const isCheckboxColumn = (column) => rgtIsCheckboxHeader(headers[column]);
+  const insertColumnAt = (index) => {
+    const id = 'added-' + nextColumnNumber;
+    setNextColumnNumber((current) => current + 1);
+    setHeaders((current) => [...current.slice(0,index), 'NEW COLUMN', ...current.slice(index)]);
+    setColumnIds((current) => [...current.slice(0,index), id, ...current.slice(index)]);
+    setManualColumnIds((current) => new Set([...current,id]));
+    setCells((current) => { const next={}; Object.entries(current).forEach(([key,value])=>{const [row,column]=key.split(':').map(Number);next[row+':'+(column>=index?column+1:column)]=value;}); return next; });
+    setSelectedColumn(index); setColumnContextMenu(null);
+  };
+  const deleteColumnAt = (index) => {
+    if (index == null || headers.length <= 1) return;
+    const removeId=columnIds[index];
+    setHeaders((current)=>current.filter((_,i)=>i!==index));
+    setColumnIds((current)=>current.filter((_,i)=>i!==index));
+    setManualColumnIds((current)=>{const next=new Set(current);next.delete(removeId);return next;});
+    setCells((current)=>{const next={};Object.entries(current).forEach(([key,value])=>{const [row,column]=key.split(':').map(Number);if(column!==index)next[row+':'+(column>index?column-1:column)]=value;});return next;});
+    setSelectedColumn(null); setColumnContextMenu(null);
+  };
+  const copyColumn = (cut=false) => { if(selectedColumn==null)return; const values={};Object.entries(cells).forEach(([key,value])=>{const [row,column]=key.split(':').map(Number);if(column===selectedColumn)values[row]=value;});setColumnClipboard({header:headers[selectedColumn],values,cut,source:selectedColumn});setColumnContextMenu(null); };
+  const pasteColumn = () => { if(selectedColumn==null||!columnClipboard)return;setHeaders((current)=>current.map((h,i)=>i===selectedColumn?columnClipboard.header:h));setCells((current)=>{const next={...current};Object.keys(next).forEach((key)=>{if(Number(key.split(':')[1])===selectedColumn)delete next[key];});Object.entries(columnClipboard.values).forEach(([row,value])=>next[row+':'+selectedColumn]=value);return next;});if(columnClipboard.cut&&columnClipboard.source!==selectedColumn){const source=columnClipboard.source;setCells((current)=>{const next={...current};Object.keys(next).forEach((key)=>{if(Number(key.split(':')[1])===source)delete next[key];});return next;});}setColumnContextMenu(null); };
+  const clearColumn = () => { if(selectedColumn==null)return;setCells((current)=>{const next={...current};Object.keys(next).forEach((key)=>{if(Number(key.split(':')[1])===selectedColumn)delete next[key];});return next;});setColumnContextMenu(null); };
+  const setSelectedColumnWidth = () => { if(selectedColumn==null)return;const value=window.prompt('Column width',String(columnWidths[selectedColumn]||205));const width=Number(value);if(Number.isFinite(width)&&width>=50)setColumnWidths((current)=>({...current,[selectedColumn]:width}));setColumnContextMenu(null); };
+  const formatSelectedColumn = () => { if(selectedColumn==null)return;const color=window.prompt('Cell background color',columnFormats[selectedColumn]||'#ffffff');if(color)setColumnFormats((current)=>({...current,[selectedColumn]:color}));setColumnContextMenu(null); };
+  const hideSelectedColumn = () => { if(selectedColumn==null)return;setHiddenColumns((current)=>new Set([...current,selectedColumn]));setSelectedColumn(null);setColumnContextMenu(null); };
+  const unhideColumns = () => { setHiddenColumns(new Set());setColumnContextMenu(null); };
+  const openColumnMenu = (event,index) => { event.preventDefault();event.stopPropagation();setContextMenuSearch('');setSelectedColumn(index);setColumnContextMenu({left:Math.min(event.clientX,window.innerWidth-292),top:Math.min(event.clientY,window.innerHeight-510)}); };
+  const closeColumnMenu = () => { setColumnContextMenu(null); setContextMenuSearch(''); };
+  const visibleColumnIndexes = headers.map((_,index)=>index).filter((index)=>!hiddenColumns.has(index));
+  const columnValues = menu ? Array.from(new Set(Array.from({length: rows}, (_, row) => valueAt(row, menu.index)).filter(Boolean))).sort((a,b) => a.localeCompare(b)) : [];
+  const searchedValues = columnValues.filter((value) => value.toLowerCase().includes(filterSearch.toLowerCase()));
+  const activeSelected = selectedValues || new Set(columnValues);
+  const visibleRows = Array.from({length:rows}, (_, row) => row).filter((row) => Object.entries(filters).every(([column, allowed]) => allowed.has(valueAt(row, Number(column)))));
+  if (sortState) visibleRows.sort((a,b) => valueAt(a,sortState.column).localeCompare(valueAt(b,sortState.column),undefined,{numeric:true}) * (sortState.direction === 'asc' ? 1 : -1));
+  const openMenu = (event, index) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    const values = Array.from(new Set(Array.from({length:rows},(_,row)=>valueAt(row,index)).filter(Boolean)));
+    setFilterSearch('');
+    setSelectedValues(filters[index] ? new Set(filters[index]) : new Set(values));
+    setMenu(menu && menu.index === index ? null : {index,left:Math.min(box.left,window.innerWidth-292),top:box.bottom});
+  };
+  const closeMenu = () => { setMenu(null); setFilterSearch(''); setSelectedValues(null); };
+  const applyFilter = () => {
+    setFilters((current) => ({...current,[menu.index]:new Set(selectedValues || [])}));
+    closeMenu();
+  };
+  const clearFilter = () => {
+    setFilters((current) => { const next={...current}; delete next[menu.index]; return next; });
+    closeMenu();
+  };
+  return <div className="rgt-x-page" onPointerDown={() => columnContextMenu && closeColumnMenu()}>
+    <style>{'.rgt-x-page{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;background:#f3f6f8;font-family:Calibri,Arial,sans-serif;color:#17212b}.rgt-x-top{height:58px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#217346;color:#fff}.rgt-x-top button{padding:8px 15px;border:0;border-radius:4px;background:#fff;color:#185c37;font-weight:700;cursor:pointer}.rgt-x-top h2{margin:0;font-size:20px}.rgt-x-formula{height:34px;display:grid;grid-template-columns:86px 34px 1fr;align-items:center;background:#fff;border-bottom:1px solid #bbb}.rgt-x-formula span{text-align:center;border-right:1px solid #ccc}.rgt-x-scroll{flex:1;min-height:0;overflow:auto;background:#fff}.rgt-x-table{border-collapse:separate;border-spacing:0;table-layout:fixed;width:max-content}.rgt-x-table th,.rgt-x-table td{box-sizing:border-box;border-right:1px solid #aaa;border-bottom:1px solid #bbb;padding:0}.rgt-x-corner,.rgt-x-letter,.rgt-x-row{background:#e6e6e6;text-align:center;font-weight:400}.rgt-x-corner{position:sticky;top:0;left:0;z-index:80;width:46px;min-width:46px}.rgt-x-letter{position:sticky;top:0;z-index:60;height:24px;font-size:12px}.rgt-x-row{position:sticky;left:0;z-index:45;width:46px;min-width:46px;font-size:12px}.rgt-x-head{position:sticky;top:24px;z-index:55;width:205px;min-width:205px;height:82px;font-size:13px;font-weight:800}.rgt-x-hi{height:82px;display:grid;grid-template-columns:1fr 24px}.rgt-x-ht{box-sizing:border-box;width:100%;height:100%;padding:5px;border:0;background:transparent;text-align:center;font:800 13px Calibri,Arial,sans-serif;outline:0}.rgt-x-ht:focus{outline:2px solid #217346;outline-offset:-2px;background:#fff8}.rgt-x-filter{position:relative;border:0;border-left:1px solid rgba(0,0,0,.18);background:rgba(255,255,255,.2);cursor:pointer}.rgt-x-filter:after{content:"";position:absolute;bottom:6px;left:7px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid #40515d}.rgt-x-cell{width:205px;min-width:205px;height:25px}.rgt-x-cell input{box-sizing:border-box;width:100%;height:25px;border:0;padding:2px 5px;outline:0;font:12px Calibri,Arial,sans-serif;background:#fff}.rgt-x-cell input:focus{outline:2px solid #217346;outline-offset:-2px}.rgt-x-cell input:read-only{background:#f3f3f3;color:#555;cursor:default}.rgt-x-cell .rgt-x-checkbox{display:block;width:15px;height:15px;margin:5px auto;accent-color:#ff0000;cursor:pointer}.rgt-x-top button:disabled{opacity:.5;cursor:not-allowed}.rgt-x-selected-column{box-shadow:inset 2px 0 #217346,inset -2px 0 #217346}.rgt-x-column-menu{position:fixed;z-index:100001;width:282px;padding:6px;background:#fff;border:1px solid #777;border-radius:3px;box-shadow:0 8px 24px #0004;animation:rgtXMenuIn .12s ease-out}.rgt-x-column-menu-search{box-sizing:border-box;width:100%;height:29px;margin-bottom:5px;padding:4px 7px;border:1px solid #888;outline:0;font:12px Calibri,Arial,sans-serif}.rgt-x-column-menu-search:focus{border-color:#217346;box-shadow:0 0 0 1px #217346}.rgt-x-column-menu button{display:block;width:100%;padding:8px 12px;border:0;background:#fff;text-align:left;cursor:pointer;font:13px Calibri,Arial,sans-serif;transition:background .1s ease}.rgt-x-column-menu button:hover{background:#e8f3ff}.rgt-x-column-menu button:disabled{color:#aaa;cursor:not-allowed;background:#fff}@keyframes rgtXMenuIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}.rgt-x-menu{position:fixed;z-index:100000;width:282px;padding:7px;background:#fff;border:1px solid #777;box-shadow:0 6px 20px #0004;font-size:13px}.rgt-x-menu-action{display:block;width:100%;padding:7px;border:0;background:#fff;text-align:left;cursor:pointer}.rgt-x-menu-action:hover{background:#e8f3ff}.rgt-x-separator{height:1px;margin:4px 0;background:#ddd}.rgt-x-search{box-sizing:border-box;width:100%;height:28px;margin:4px 0 6px;padding:4px 7px;border:1px solid #999}.rgt-x-values{max-height:180px;overflow:auto;border:1px solid #bbb;padding:4px}.rgt-x-check{display:flex;align-items:center;gap:5px;padding:2px}.rgt-x-menu-buttons{display:flex;justify-content:flex-end;gap:8px;padding-top:8px}.rgt-x-menu-buttons button{padding:5px 12px;background:#fff;border:1px solid #999;border-radius:3px;cursor:pointer}.rgt-x-bottom{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#217346;color:#fff;font-size:12px}.rgt-x-tab{padding:5px 20px;border-bottom:3px solid #fff}' + RGT_EXCEL_HEADER_COLOR_CSS}</style>
+    <div className="rgt-x-top"><button onClick={onBack}>BACK</button><h2>EXCEL</h2></div>
+    <div className="rgt-x-formula"><span>A1</span><span>fx</span><div /></div>
+    <div className="rgt-x-scroll" onScroll={loadMoreRows}><table className="rgt-x-table">
+      <colgroup><col style={{width:46}} />{visibleColumnIndexes.map((i)=><col key={columnIds[i]} style={{width:columnWidths[i]||205}} />)}</colgroup>
+      <thead><tr><th className="rgt-x-corner" />{visibleColumnIndexes.map((i)=><th className={'rgt-x-letter '+(selectedColumn===i?'rgt-x-selected-column':'')} key={columnIds[i]} onClick={()=>setSelectedColumn(i)} onContextMenu={(event)=>openColumnMenu(event,i)}>{rgtExcelColumn(i)}</th>)}</tr>
+      <tr><th className="rgt-x-row" style={{top:24,zIndex:70}}>1</th>{visibleColumnIndexes.map((i)=><th className={'rgt-x-head '+sectionClass(i)+(selectedColumn===i?' rgt-x-selected-column':'')} key={columnIds[i]} onContextMenu={(event)=>openColumnMenu(event,i)}><div className="rgt-x-hi"><input className="rgt-x-ht" value={headers[i]} onChange={(event)=>setHeaders((current)=>current.map((value,index)=>index===i?event.target.value:value))} aria-label={'Edit header '+headers[i]}/><button className="rgt-x-filter" aria-label={'Filter '+headers[i]} onClick={(event)=>openMenu(event,i)} /></div></th>)}</tr></thead>
+      <tbody>{visibleRows.map((r)=><tr key={r}><th className="rgt-x-row">{r+2}</th>{visibleColumnIndexes.map((c)=><td className={'rgt-x-cell '+(selectedColumn===c?'rgt-x-selected-column':'')} key={columnIds[c]} style={{background:columnFormats[c]||undefined}} onContextMenu={(event)=>openColumnMenu(event,c)}>{isCheckboxColumn(c)
+  ? <input type="checkbox" className="rgt-x-checkbox" checked={valueAt(r,c) === '1'} onChange={(event)=>setCells((current)=>({...current,[r+':'+c]:event.target.checked?'1':''}))} aria-label={headers[c]+' row '+(r+2)} />
+  : <input value={valueAt(r,c)} readOnly={!isManualColumn(c)} onChange={(event)=>isManualColumn(c)&&setCells((current)=>({...current,[r+':'+c]:event.target.value}))} aria-label={headers[c]+' row '+(r+2)} />}</td>)}</tr>)}</tbody>
+    </table></div>
+    {menu&&<div className="rgt-x-menu" style={{left:menu.left,top:menu.top}}>
+      <button className="rgt-x-menu-action" onClick={()=>{setSortState({column:menu.index,direction:'asc'});closeMenu();}}>Sort A to Z</button>
+      <button className="rgt-x-menu-action" onClick={()=>{setSortState({column:menu.index,direction:'desc'});closeMenu();}}>Sort Z to A</button>
+      <div className="rgt-x-separator" />
+      <button className="rgt-x-menu-action" onClick={clearFilter}>Clear Filter From "{headers[menu.index]}"</button>
+      <input className="rgt-x-search" placeholder="Search" value={filterSearch} onChange={(event)=>setFilterSearch(event.target.value)} autoFocus />
+      <div className="rgt-x-values">
+        <label className="rgt-x-check"><input type="checkbox" checked={searchedValues.every((value)=>activeSelected.has(value))} onChange={(event)=>{const next=new Set(activeSelected);searchedValues.forEach((value)=>event.target.checked?next.add(value):next.delete(value));setSelectedValues(next);}} /> (Select All)</label>
+        {searchedValues.map((value)=><label className="rgt-x-check" key={value}><input type="checkbox" checked={activeSelected.has(value)} onChange={(event)=>{const next=new Set(activeSelected);event.target.checked?next.add(value):next.delete(value);setSelectedValues(next);}} /> {value}</label>)}
+      </div>
+      <div className="rgt-x-menu-buttons"><button onClick={applyFilter}>OK</button><button onClick={closeMenu}>Cancel</button></div>
+    </div>}
+        {columnContextMenu&&<div className="rgt-x-column-menu" style={{left:columnContextMenu.left,top:columnContextMenu.top}} onPointerDown={(event)=>event.stopPropagation()} onContextMenu={(event)=>event.preventDefault()}>
+      <input className="rgt-x-column-menu-search" placeholder="Search the menus" value={contextMenuSearch} onChange={(event)=>setContextMenuSearch(event.target.value)} autoFocus />
+      {[
+        ['Cut',()=>copyColumn(true),false],
+        ['Copy',()=>copyColumn(false),false],
+        ['Paste',pasteColumn,!columnClipboard],
+        ['Paste Special...',pasteColumn,!columnClipboard],
+        ['Insert',()=>insertColumnAt(selectedColumn),false],
+        ['Delete',()=>deleteColumnAt(selectedColumn),headers.length<=1],
+        ['Clear Contents',clearColumn,false],
+        ['Format Cells...',formatSelectedColumn,false],
+        ['Column Width...',setSelectedColumnWidth,false],
+        ['Hide',hideSelectedColumn,false],
+        ['Unhide',unhideColumns,!hiddenColumns.size]
+      ].filter(([label])=>label.toLowerCase().includes(contextMenuSearch.toLowerCase())).map(([label,action,disabled])=><React.Fragment key={label}>
+        {(label==='Insert'||label==='Format Cells...')&&<div className="rgt-x-separator" />}
+        <button onClick={action} disabled={disabled}>{label}</button>
+      </React.Fragment>)}
+    </div>}
+<div className="rgt-x-bottom"><span className="rgt-x-tab">Sheet1</span><span>{headers.length} columns · Unlimited rows</span></div>
+  </div>;
+}
 function ExcelWorkbookViewer({ existingWorkbooks = [], onClose }) {
   const fileInputRef = useRef(null);
   const [data, setData] = useState(null);
