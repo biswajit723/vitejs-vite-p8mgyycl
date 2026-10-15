@@ -311,38 +311,32 @@ function isIsoPlanningValidEntry(entry) {
   });
   return !rowHasDeleteMarker;
 }
-function buildIsoFourWeekPlan(moduleData) {
-  const validEntries = (moduleData?.entries || [])
-    .filter(isIsoPlanningValidEntry)
-    .map((entry) => ({
-      entry,
-      date: entry.forecastColumn >= 0 ? parseIsoForecastDate(entry.row?.[entry.forecastColumn]) : null,
-    }))
-    .filter((item) => item.date)
-    .sort((a, b) => a.date - b.date);
-
-  const availableDateMap = new Map();
-  for (const item of validEntries) availableDateMap.set(isoDateKey(item.date), item.date);
-  const availableDates = [...availableDateMap.values()].sort((a, b) => a - b);
-  const selectedDates = availableDates.slice(-4);
+function buildIsoFourWeekPlan(moduleData, forecastMap) {
+  // Module-wise 4 WEEK plan: reads ONLY sheet HH_TOPSIDE_OVERALL_CS_OFSI (column FORECAST ISSUE DATE) through forecastMap,
+  // so blank rows, Line Deleted rows and struck-through rows are already excluded (same rule as the Planning page).
+  // The latest four distinct forecast dates of the module become W1..W4 (oldest to newest) and the rows of each date are counted.
+  const items = (forecastMap?.get(normalize(moduleData?.moduleName)) || []).slice().sort((a, b) => a.date - b.date);
+  const dateMap = new Map();
+  for (const item of items) dateMap.set(isoDateKey(item.date), item.date);
+  const selectedDates = [...dateMap.values()].sort((a, b) => a - b).slice(-4);
   while (selectedDates.length < 4) selectedDates.unshift(null);
-
   const weeks = selectedDates.map((selectedDate, weekIndex) => {
     const dateKey = selectedDate ? isoDateKey(selectedDate) : '';
-    const rows = selectedDate ? validEntries.filter((item) => isoDateKey(item.date) === dateKey) : [];
+    const rows = selectedDate ? items.filter((item) => isoDateKey(item.date) === dateKey) : [];
     return {
       weekIndex,
       label: 'W' + (weekIndex + 1),
       range: selectedDate ? isoShortDate(selectedDate) : 'No Date',
       rows,
       total: rows.length,
-      holds: rows.filter((item) => item.entry.holdColumn >= 0 && normalize(item.entry.row?.[item.entry.holdColumn]) === 'yes').length,
+      holds: rows.filter((item) => item.hold).length,
       days: [],
     };
   });
-
   return {
     weeks,
+    total: weeks.reduce((sum, week) => sum + week.total, 0),
+    holds: weeks.reduce((sum, week) => sum + week.holds, 0),
     maxValue: Math.max(1, ...weeks.map((week) => week.total)),
   };
 }
@@ -1602,6 +1596,7 @@ function IsoPlanningDashboardPage({ workbooks, back, openExcel }) {
   const planSelection = planningMode ? projectConsole : moduleSelection;
   const forecastMap = useMemo(() => buildIsoForecastMap(workbooks), [workbooks]);
   const moduleMonthPlan = useMemo(() => buildIsoLatestFourMonthPlan(planSelection, forecastMap), [planSelection, forecastMap]);
+  const moduleWeekPlan = useMemo(() => buildIsoFourWeekPlan(planSelection, forecastMap), [planSelection, forecastMap]);
   const projectMonthPlan = useMemo(() => {
     const modulePlans = modules.map((moduleData) => buildIsoLatestFourMonthPlan(moduleData, forecastMap));
     return {
@@ -1656,11 +1651,11 @@ function IsoPlanningDashboardPage({ workbooks, back, openExcel }) {
         <div className="iso-month-matrix"><div className="head"><span>MONTH / MODULE</span>{projectMonthPlan.modules.map((item)=><b key={item.moduleName}>{item.moduleName}</b>)}<strong>TOTAL</strong></div>{[0,1,2,3].map((monthIndex)=><div className="row" key={monthIndex}><span>MONTH {monthIndex+1}</span>{projectMonthPlan.modules.map((item)=><b className="iso-month-cell" key={item.moduleName}>{item.months[monthIndex].total}<small>{item.months[monthIndex].label}</small></b>)}<strong>{projectMonthPlan.modules.reduce((sum,item)=>sum+item.months[monthIndex].total,0)}</strong></div>)}</div></> : <div className="iso-month-empty">No module forecast data found.</div>}
         <div className="iso-plan-chart-note"><span>Source sheet: HH_TOPSIDE_OVERALL_CS_OFSI · each module uses its own latest four distinct months from FORECAST ISSUE DATE.</span><span>Blank rows, LINE DELETED and struck-through rows are excluded.</span></div>
       </section> : planSelection && planSelection.entries.length ? <section className="iso-plan-chart-card iso-module-plan-below-progress iso-premium-module-plan">
-        <div className="iso-plan-chart-head"><div><p>MODULE-WISE · LATEST 4 MONTHS AUTOMATIC FORECAST</p><h2>4 MONTHS PLAN</h2></div><div className="iso-plan-chart-source">FORECAST ISSUE DATE</div></div>
-        <div className="iso-premium-kpis"><article><span>NO. OF ISOs</span><strong>{moduleMonthPlan.total}</strong><small>Latest four forecast months</small></article><article><span>HOLDS</span><strong>{moduleMonthPlan.holds}</strong><small>Latest four forecast months</small></article></div>
-        <div className="iso-premium-chart"><div className="iso-premium-grid-lines"><i/><i/><i/><i/><i/></div><div className="iso-premium-bars">{moduleMonthPlan.months.map((month,index)=>{const maxMonth=Math.max(1,...moduleMonthPlan.months.map((item)=>item.total));return <article className="iso-premium-week" key={month.key}><div className="iso-premium-value">{month.total}</div><div className="iso-premium-track"><div className={'iso-premium-fill w'+(index+1)} style={{height:Math.max(month.total?12:3,(month.total/maxMonth)*100)+'%'}}><span>{month.total}</span></div></div><div className="iso-premium-label"><b>{month.slot}</b><em>{month.label}</em><small>NO. OF ISOs</small></div></article>})}</div></div>
-        <div className="iso-premium-table"><div className="head"><span>PLAN SUMMARY</span>{moduleMonthPlan.months.map((month)=><b key={month.key}>{month.slot}</b>)}<strong>NO. OF ISOs</strong></div><div className="body"><span>FORECAST COUNT</span>{moduleMonthPlan.months.map((month)=><b key={month.key}>{month.total}</b>)}<strong>{moduleMonthPlan.total}</strong></div></div>
-        <div className="iso-plan-chart-note"><span>Counts dated FORECAST ISSUE DATE rows from the latest four distinct months.</span><span>Blank rows, delete markers, and struck-through forecast dates are excluded. HOLD counts only explicit YES values.</span></div>
+        <div className="iso-plan-chart-head"><div><p>MODULE-WISE · LATEST 4 WEEKS AUTOMATIC FORECAST</p><h2>4 WEEKS PLAN</h2></div><div className="iso-plan-chart-source">FORECAST ISSUE DATE</div></div>
+        <div className="iso-premium-kpis"><article><span>NO. OF ISOs</span><strong>{moduleWeekPlan.total}</strong><small>Latest four forecast dates</small></article><article><span>HOLDS</span><strong>{moduleWeekPlan.holds}</strong><small>Latest four forecast dates</small></article></div>
+        <div className="iso-premium-chart"><div className="iso-premium-grid-lines"><i/><i/><i/><i/><i/></div><div className="iso-premium-bars">{moduleWeekPlan.weeks.map((week,index)=><article className="iso-premium-week" key={'week-'+index}><div className="iso-premium-value">{week.total}</div><div className="iso-premium-track"><div className={'iso-premium-fill w'+(index+1)} style={{height:Math.max(week.total?12:3,(week.total/moduleWeekPlan.maxValue)*100)+'%'}}><span>{week.total}</span></div></div><div className="iso-premium-label"><b>{week.label}</b><em>{week.range}</em><small>NO. OF ISOs</small></div></article>)}</div></div>
+        <div className="iso-premium-table"><div className="head"><span>PLAN SUMMARY</span>{moduleWeekPlan.weeks.map((week)=><b key={'head-'+week.label}>{week.label}</b>)}<strong>NO. OF ISOs</strong></div><div className="body"><span>FORECAST COUNT</span>{moduleWeekPlan.weeks.map((week)=><b key={'count-'+week.label}>{week.total}</b>)}<strong>{moduleWeekPlan.total}</strong></div></div>
+        <div className="iso-plan-chart-note"><span>Counts FORECAST ISSUE DATE rows of the latest four distinct dates (W1 to W4) from sheet HH_TOPSIDE_OVERALL_CS_OFSI.</span><span>Blank rows, Line Deleted rows and struck-through rows are excluded. HOLD counts only explicit YES values.</span></div>
       </section> : null}</> : <div className="iso-empty"><h2>{modules.length ? 'Select a module or open Console' : 'ISO Excel data not found'}</h2><span>{modules.length ? 'Module view shows module-wise counts. Console shows the complete project.' : 'Connect the folder containing ' + ISO_FILE_PREFIX + ' from Reports and Status.'}</span></div>}</section>
     </div>
   </Layout>;
