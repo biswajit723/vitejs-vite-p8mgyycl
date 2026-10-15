@@ -1623,7 +1623,7 @@ function IsoPlanningDashboardPage({ workbooks, back, openExcel }) {
   };
   const openAnalytics = () => setBlankToolPage('ANALYTICS');
   const openRevision = () => setBlankToolPage('REVISION');
-  if (blankToolPage === 'EXCEL') return <RgtExcelSheet onBack={() => setBlankToolPage(null)} />;
+  if (blankToolPage === 'EXCEL') return <RgtExcelSheet onBack={() => setBlankToolPage(null)} connectedWorkbooks={workbooks} />;
   if (blankToolPage) {
     return <Layout title={blankToolPage} sub="ISO Planning and Management · Project 4193" back={() => setBlankToolPage(null)}>
       <style>{`
@@ -2059,12 +2059,16 @@ function rgtExcelColumn(index) {
   while (number) { number--; name = String.fromCharCode(65 + number % 26) + name; number = Math.floor(number / 26); }
   return name;
 }
-function RgtExcelSheet({ onBack }) {
+const RGT_OFSI_WORKBOOK_NAME = '4193_HH_Isometrics Control Sheet-Piping_OFSI';
+const RGT_OFSI_SHEET_NAME = 'HH_TOPSIDE_OVERALL_CS_OFSI';
+function RgtExcelSheet({ onBack, connectedWorkbooks = [] }) {
   const [headers, setHeaders] = useState(() => RGT_EXCEL_HEADERS.map(rgtCleanExcelHeader));
   const [columnIds, setColumnIds] = useState(() => RGT_EXCEL_HEADERS.map((_, index) => 'base-' + index));
   const [manualColumnIds, setManualColumnIds] = useState(() => new Set(Array.from(RGT_EXCEL_MANUAL_COLUMNS, (index) => 'base-' + index)));
   const [nextColumnNumber, setNextColumnNumber] = useState(1);
   const [cells, setCells] = useState({});
+  const [importedCellKeys, setImportedCellKeys] = useState(() => new Set());
+  const [sheetZoom, setSheetZoom] = useState(1);
   const [selectedColumn, setSelectedColumn] = useState(null);
   const [columnContextMenu, setColumnContextMenu] = useState(null);
   const [contextMenuSearch, setContextMenuSearch] = useState('');
@@ -2078,6 +2082,40 @@ function RgtExcelSheet({ onBack }) {
   const [filters, setFilters] = useState({});
   const [sortState, setSortState] = useState(null);
   const [rows, setRows] = useState(200);
+  const connectedOfsiSheet = useMemo(() => {
+    const targetBook = normalize(RGT_OFSI_WORKBOOK_NAME);
+    const targetSheet = normalize(RGT_OFSI_SHEET_NAME);
+    const workbookEntry = (connectedWorkbooks || []).find((entry) => normalize(entry?.file?.name || '').startsWith(targetBook));
+    return workbookEntry?.sheets?.find((sheetEntry) => normalize(sheetEntry?.sheetName || '') === targetSheet) || null;
+  }, [connectedWorkbooks]);
+  useEffect(() => {
+    if (!connectedOfsiSheet) return;
+    const sourceRows = connectedOfsiSheet.rows || [];
+    const headerRowIndex = Number.isInteger(connectedOfsiSheet.header?.rowIndex) ? connectedOfsiSheet.header.rowIndex : 0;
+    const sourceHeader = sourceRows[headerRowIndex] || [];
+    const dataRows = sourceRows.slice(headerRowIndex + 1);
+    const sourceColumnCount = Math.max(sourceHeader.length, ...dataRows.map((row) => (row || []).length), 0);
+    if (sourceColumnCount > headers.length) {
+      setHeaders((current) => [...current, ...Array.from({ length: sourceColumnCount - current.length }, (_, offset) => String(sourceHeader[current.length + offset] ?? ('COLUMN ' + (current.length + offset + 1))))]);
+      setColumnIds((current) => [...current, ...Array.from({ length: sourceColumnCount - current.length }, (_, offset) => 'source-' + (current.length + offset))]);
+    }
+    const nextCells = {};
+    const nextImportedKeys = new Set();
+    dataRows.forEach((row, rowIndex) => {
+      (row || []).forEach((value, columnIndex) => {
+        if (value === null || value === undefined || value === '') return;
+        const key = rowIndex + ':' + columnIndex;
+        const textValue = value instanceof Date ? value.toLocaleDateString() : String(value);
+        nextCells[key] = rgtIsCheckboxHeader(headers[columnIndex])
+          ? (/^(?:1|true|yes|y|x|✓|✔|tick|checked|done|complete|completed|issued)$/i.test(textValue.trim()) ? '1' : '')
+          : textValue;
+        nextImportedKeys.add(key);
+      });
+    });
+    setCells(nextCells);
+    setImportedCellKeys(nextImportedKeys);
+    setRows(200);
+  }, [connectedOfsiSheet]);
   const loadMoreRows = (event) => {
     const element = event.currentTarget;
     if (element.scrollTop + element.clientHeight >= element.scrollHeight - 500) setRows((current) => current + 200);
@@ -2136,14 +2174,14 @@ function RgtExcelSheet({ onBack }) {
     closeMenu();
   };
   return <div className="rgt-x-page" onPointerDown={() => columnContextMenu && closeColumnMenu()}>
-    <style>{'.rgt-x-page{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;background:#f3f6f8;font-family:Calibri,Arial,sans-serif;color:#17212b}.rgt-x-top{height:58px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#217346;color:#fff}.rgt-x-top button{padding:8px 15px;border:0;border-radius:4px;background:#fff;color:#185c37;font-weight:700;cursor:pointer}.rgt-x-top h2{margin:0;font-size:20px}.rgt-x-formula{height:34px;display:grid;grid-template-columns:86px 34px 1fr;align-items:center;background:#fff;border-bottom:1px solid #bbb}.rgt-x-formula span{text-align:center;border-right:1px solid #ccc}.rgt-x-scroll{flex:1;min-height:0;overflow:auto;background:#fff}.rgt-x-table{border-collapse:separate;border-spacing:0;table-layout:fixed;width:max-content}.rgt-x-table th,.rgt-x-table td{box-sizing:border-box;border-right:1px solid #aaa;border-bottom:1px solid #bbb;padding:0}.rgt-x-corner,.rgt-x-letter,.rgt-x-row{background:#e6e6e6;text-align:center;font-weight:400}.rgt-x-corner{position:sticky;top:0;left:0;z-index:80;width:46px;min-width:46px}.rgt-x-letter{position:sticky;top:0;z-index:60;height:24px;font-size:12px}.rgt-x-row{position:sticky;left:0;z-index:45;width:46px;min-width:46px;font-size:12px}.rgt-x-head{position:sticky;top:24px;z-index:55;width:205px;min-width:205px;height:82px;font-size:13px;font-weight:800}.rgt-x-hi{height:82px;display:grid;grid-template-columns:1fr 24px}.rgt-x-ht{box-sizing:border-box;width:100%;height:100%;padding:5px;border:0;background:transparent;text-align:center;font:800 13px Calibri,Arial,sans-serif;outline:0}.rgt-x-ht:focus{outline:2px solid #217346;outline-offset:-2px;background:#fff8}.rgt-x-filter{position:relative;border:0;border-left:1px solid rgba(0,0,0,.18);background:rgba(255,255,255,.2);cursor:pointer}.rgt-x-filter:after{content:"";position:absolute;bottom:6px;left:7px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid #40515d}.rgt-x-cell{width:205px;min-width:205px;height:25px}.rgt-x-cell input{box-sizing:border-box;width:100%;height:25px;border:0;padding:2px 5px;outline:0;font:12px Calibri,Arial,sans-serif;background:#fff}.rgt-x-cell input:focus{outline:2px solid #217346;outline-offset:-2px}.rgt-x-cell input:read-only{background:#f3f3f3;color:#555;cursor:default}.rgt-x-cell .rgt-x-checkbox{display:block;width:15px;height:15px;margin:5px auto;accent-color:#ff0000;cursor:pointer}.rgt-x-top button:disabled{opacity:.5;cursor:not-allowed}.rgt-x-selected-column{box-shadow:inset 2px 0 #217346,inset -2px 0 #217346}.rgt-x-column-menu{position:fixed;z-index:100001;width:282px;padding:6px;background:#fff;border:1px solid #777;border-radius:3px;box-shadow:0 8px 24px #0004;animation:rgtXMenuIn .12s ease-out}.rgt-x-column-menu-search{box-sizing:border-box;width:100%;height:29px;margin-bottom:5px;padding:4px 7px;border:1px solid #888;outline:0;font:12px Calibri,Arial,sans-serif}.rgt-x-column-menu-search:focus{border-color:#217346;box-shadow:0 0 0 1px #217346}.rgt-x-column-menu button{display:block;width:100%;padding:8px 12px;border:0;background:#fff;text-align:left;cursor:pointer;font:13px Calibri,Arial,sans-serif;transition:background .1s ease}.rgt-x-column-menu button:hover{background:#e8f3ff}.rgt-x-column-menu button:disabled{color:#aaa;cursor:not-allowed;background:#fff}@keyframes rgtXMenuIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}.rgt-x-menu{position:fixed;z-index:100000;width:282px;padding:7px;background:#fff;border:1px solid #777;box-shadow:0 6px 20px #0004;font-size:13px}.rgt-x-menu-action{display:block;width:100%;padding:7px;border:0;background:#fff;text-align:left;cursor:pointer}.rgt-x-menu-action:hover{background:#e8f3ff}.rgt-x-separator{height:1px;margin:4px 0;background:#ddd}.rgt-x-search{box-sizing:border-box;width:100%;height:28px;margin:4px 0 6px;padding:4px 7px;border:1px solid #999}.rgt-x-values{max-height:180px;overflow:auto;border:1px solid #bbb;padding:4px}.rgt-x-check{display:flex;align-items:center;gap:5px;padding:2px}.rgt-x-menu-buttons{display:flex;justify-content:flex-end;gap:8px;padding-top:8px}.rgt-x-menu-buttons button{padding:5px 12px;background:#fff;border:1px solid #999;border-radius:3px;cursor:pointer}.rgt-x-bottom{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#217346;color:#fff;font-size:12px}.rgt-x-tab{padding:5px 20px;border-bottom:3px solid #fff}' + RGT_EXCEL_HEADER_COLOR_CSS}</style>
-    <div className="rgt-x-top"><button onClick={onBack}>BACK</button><h2>EXCEL</h2></div>
+    <style>{'.rgt-x-page{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;background:#f3f6f8;font-family:Calibri,Arial,sans-serif;color:#17212b}.rgt-x-top{height:58px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#217346;color:#fff}.rgt-x-top button{padding:8px 15px;border:0;border-radius:4px;background:#fff;color:#185c37;font-weight:700;cursor:pointer}.rgt-x-top h2{margin:0;font-size:20px}.rgt-x-zoom{margin-left:auto;display:flex;align-items:center;gap:7px}.rgt-x-zoom button{min-width:34px;padding:7px 9px}.rgt-x-zoom input{width:120px;accent-color:#fff}.rgt-x-zoom span{min-width:46px;text-align:right;font-weight:700}.rgt-x-formula{height:34px;display:grid;grid-template-columns:86px 34px 1fr;align-items:center;background:#fff;border-bottom:1px solid #bbb}.rgt-x-formula span{text-align:center;border-right:1px solid #ccc}.rgt-x-scroll{flex:1;min-height:0;overflow:auto;background:#fff}.rgt-x-table{border-collapse:separate;border-spacing:0;table-layout:fixed;width:max-content}.rgt-x-table th,.rgt-x-table td{box-sizing:border-box;border-right:1px solid #aaa;border-bottom:1px solid #bbb;padding:0}.rgt-x-corner,.rgt-x-letter,.rgt-x-row{background:#e6e6e6;text-align:center;font-weight:400}.rgt-x-corner{position:sticky;top:0;left:0;z-index:80;width:46px;min-width:46px}.rgt-x-letter{position:sticky;top:0;z-index:60;height:24px;font-size:12px}.rgt-x-row{position:sticky;left:0;z-index:45;width:46px;min-width:46px;font-size:12px}.rgt-x-head{position:sticky;top:24px;z-index:55;width:205px;min-width:205px;height:82px;font-size:13px;font-weight:800}.rgt-x-hi{height:82px;display:grid;grid-template-columns:1fr 24px}.rgt-x-ht{box-sizing:border-box;width:100%;height:100%;padding:5px;border:0;background:transparent;text-align:center;font:800 13px Calibri,Arial,sans-serif;outline:0}.rgt-x-ht:focus{outline:2px solid #217346;outline-offset:-2px;background:#fff8}.rgt-x-filter{position:relative;border:0;border-left:1px solid rgba(0,0,0,.18);background:rgba(255,255,255,.2);cursor:pointer}.rgt-x-filter:after{content:"";position:absolute;bottom:6px;left:7px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid #40515d}.rgt-x-cell{width:205px;min-width:205px;height:25px}.rgt-x-cell input{box-sizing:border-box;width:100%;height:25px;border:0;padding:2px 5px;outline:0;font:12px Calibri,Arial,sans-serif;background:#fff}.rgt-x-cell input:focus{outline:2px solid #217346;outline-offset:-2px}.rgt-x-cell input:read-only{background:#f3f3f3;color:#555;cursor:default}.rgt-x-cell.rgt-x-imported,.rgt-x-cell.rgt-x-imported input{background:#87ceeb!important;text-align:center!important;font-weight:700!important}.rgt-x-cell .rgt-x-checkbox{display:block;width:15px;height:15px;margin:5px auto;accent-color:#ff0000;cursor:pointer}.rgt-x-top button:disabled{opacity:.5;cursor:not-allowed}.rgt-x-selected-column{box-shadow:inset 2px 0 #217346,inset -2px 0 #217346}.rgt-x-column-menu{position:fixed;z-index:100001;width:282px;padding:6px;background:#fff;border:1px solid #777;border-radius:3px;box-shadow:0 8px 24px #0004;animation:rgtXMenuIn .12s ease-out}.rgt-x-column-menu-search{box-sizing:border-box;width:100%;height:29px;margin-bottom:5px;padding:4px 7px;border:1px solid #888;outline:0;font:12px Calibri,Arial,sans-serif}.rgt-x-column-menu-search:focus{border-color:#217346;box-shadow:0 0 0 1px #217346}.rgt-x-column-menu button{display:block;width:100%;padding:8px 12px;border:0;background:#fff;text-align:left;cursor:pointer;font:13px Calibri,Arial,sans-serif;transition:background .1s ease}.rgt-x-column-menu button:hover{background:#e8f3ff}.rgt-x-column-menu button:disabled{color:#aaa;cursor:not-allowed;background:#fff}@keyframes rgtXMenuIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}.rgt-x-menu{position:fixed;z-index:100000;width:282px;padding:7px;background:#fff;border:1px solid #777;box-shadow:0 6px 20px #0004;font-size:13px}.rgt-x-menu-action{display:block;width:100%;padding:7px;border:0;background:#fff;text-align:left;cursor:pointer}.rgt-x-menu-action:hover{background:#e8f3ff}.rgt-x-separator{height:1px;margin:4px 0;background:#ddd}.rgt-x-search{box-sizing:border-box;width:100%;height:28px;margin:4px 0 6px;padding:4px 7px;border:1px solid #999}.rgt-x-values{max-height:180px;overflow:auto;border:1px solid #bbb;padding:4px}.rgt-x-check{display:flex;align-items:center;gap:5px;padding:2px}.rgt-x-menu-buttons{display:flex;justify-content:flex-end;gap:8px;padding-top:8px}.rgt-x-menu-buttons button{padding:5px 12px;background:#fff;border:1px solid #999;border-radius:3px;cursor:pointer}.rgt-x-bottom{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#217346;color:#fff;font-size:12px}.rgt-x-tab{padding:5px 20px;border-bottom:3px solid #fff}' + RGT_EXCEL_HEADER_COLOR_CSS}</style>
+    <div className="rgt-x-top"><button onClick={onBack}>BACK</button><h2>EXCEL</h2><div className="rgt-x-zoom"><button onClick={()=>setSheetZoom((value)=>Math.max(.5,Math.round((value-.1)*10)/10))}>−</button><input type="range" min="50" max="200" step="10" value={Math.round(sheetZoom*100)} onChange={(event)=>setSheetZoom(Number(event.target.value)/100)} aria-label="Excel sheet zoom"/><button onClick={()=>setSheetZoom((value)=>Math.min(2,Math.round((value+.1)*10)/10))}>+</button><span>{Math.round(sheetZoom*100)}%</span></div></div>
     <div className="rgt-x-formula"><span>A1</span><span>fx</span><div /></div>
-    <div className="rgt-x-scroll" onScroll={loadMoreRows}><table className="rgt-x-table">
+    <div className="rgt-x-scroll" onScroll={loadMoreRows} onWheel={(event)=>{if(!event.ctrlKey)return;event.preventDefault();setSheetZoom((value)=>Math.max(.5,Math.min(2,Math.round((value+(event.deltaY<0?.1:-.1))*10)/10)));}}><table className="rgt-x-table" style={{zoom:sheetZoom}}>
       <colgroup><col style={{width:46}} />{visibleColumnIndexes.map((i)=><col key={columnIds[i]} style={{width:columnWidths[i]||205}} />)}</colgroup>
       <thead><tr><th className="rgt-x-corner" />{visibleColumnIndexes.map((i)=><th className={'rgt-x-letter '+(selectedColumn===i?'rgt-x-selected-column':'')} key={columnIds[i]} onClick={()=>setSelectedColumn(i)} onContextMenu={(event)=>openColumnMenu(event,i)}>{rgtExcelColumn(i)}</th>)}</tr>
       <tr><th className="rgt-x-row" style={{top:24,zIndex:70}}>1</th>{visibleColumnIndexes.map((i)=><th className={'rgt-x-head '+sectionClass(i)+(selectedColumn===i?' rgt-x-selected-column':'')} key={columnIds[i]} onContextMenu={(event)=>openColumnMenu(event,i)}><div className="rgt-x-hi"><input className="rgt-x-ht" value={headers[i]} onChange={(event)=>setHeaders((current)=>current.map((value,index)=>index===i?event.target.value:value))} aria-label={'Edit header '+headers[i]}/><button className="rgt-x-filter" aria-label={'Filter '+headers[i]} onClick={(event)=>openMenu(event,i)} /></div></th>)}</tr></thead>
-      <tbody>{visibleRows.map((r)=><tr key={r}><th className="rgt-x-row">{r+2}</th>{visibleColumnIndexes.map((c)=><td className={'rgt-x-cell '+(selectedColumn===c?'rgt-x-selected-column':'')} key={columnIds[c]} style={{background:columnFormats[c]||undefined}} onContextMenu={(event)=>openColumnMenu(event,c)}>{isCheckboxColumn(c)
+      <tbody>{visibleRows.map((r)=><tr key={r}><th className="rgt-x-row">{r+2}</th>{visibleColumnIndexes.map((c)=><td className={'rgt-x-cell '+(selectedColumn===c?'rgt-x-selected-column ':'')+(importedCellKeys.has(r+':'+c)?'rgt-x-imported':'')} key={columnIds[c]} style={{background:columnFormats[c]||undefined}} onContextMenu={(event)=>openColumnMenu(event,c)}>{isCheckboxColumn(c)
   ? <input type="checkbox" className="rgt-x-checkbox" checked={valueAt(r,c) === '1'} onChange={(event)=>setCells((current)=>({...current,[r+':'+c]:event.target.checked?'1':''}))} aria-label={headers[c]+' row '+(r+2)} />
   : <input value={valueAt(r,c)} readOnly={!isManualColumn(c)} onChange={(event)=>isManualColumn(c)&&setCells((current)=>({...current,[r+':'+c]:event.target.value}))} aria-label={headers[c]+' row '+(r+2)} />}</td>)}</tr>)}</tbody>
     </table></div>
