@@ -1591,7 +1591,7 @@ function IsoPlanningDashboardPage({ workbooks, back, openExcel }) {
   const hold = isoMetricRows(selected, 'hold').length;
   const balance = Math.max(0, total - issued - hold);
   const issuedPercent = total ? Math.round((issued / total) * 100) : 0;
-  const revisionRatio = revision ? (total / revision).toFixed(2) : '0';
+  const revisionRatio = total ? (revision / total).toFixed(2) : '0';
   const stageSummary = isoStageSummary(selected);
   const planSelection = planningMode ? projectConsole : moduleSelection;
   const forecastMap = useMemo(() => buildIsoForecastMap(workbooks), [workbooks]);
