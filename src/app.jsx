@@ -1513,7 +1513,77 @@ function LineStatusPage({ moduleName, data, back }) {
   </main>;
 }
 
+  const SUPPORT_VALIDATION_INITIAL_ROWS = [
+    { lineNumber: '4193-SYS-1501-005-90', uid: '90', node: 'R+G(PORT-STB)(Gap=5mm)' },
+    { lineNumber: '4193-SYS-1501-005-130', uid: '130', node: 'R+G(PORT-STB)+HD(Gap=5mm)' },
+  ];
+  const supportValidationHeader = (value) => normalize(value);
+  function SupportValidationPage({ moduleName, back }) {
+    const fileInputRef = useRef(null);
+    const [rows, setRows] = useState(SUPPORT_VALIDATION_INITIAL_ROWS);
+    const [query, setQuery] = useState('');
+    const [fileName, setFileName] = useState('4193-SYS-1501-005_SUPPORT-SUMMARY');
+    const [message, setMessage] = useState('2 rows loaded in original Excel sequence.');
+    const filteredRows = useMemo(() => {
+      const term = query.trim().toLowerCase();
+      if (!term) return rows;
+      return rows.filter((row) => [row.lineNumber, row.uid, row.node].some((value) => String(value ?? '').toLowerCase().includes(term)));
+    }, [rows, query]);
+    const loadSupportSummary = async (event) => {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+      try {
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+        const parsedRows = [];
+        for (const sheetName of workbook.SheetNames) {
+          const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: false, defval: '', blankrows: true });
+          let headerRowIndex = -1;
+          let lineColumn = -1;
+          let uidColumn = -1;
+          let nodeColumn = -1;
+          for (let rowIndex = 0; rowIndex < Math.min(sheetRows.length, 40); rowIndex += 1) {
+            const row = sheetRows[rowIndex] ?? [];
+            const foundLine = row.findIndex((value) => supportValidationHeader(value) === 'linenumber');
+            const foundUid = row.findIndex((value) => supportValidationHeader(value) === 'uid');
+            const foundNode = row.findIndex((value) => supportValidationHeader(value) === 'node');
+            if (foundLine >= 0 && foundUid >= 0 && foundNode >= 0) {
+              headerRowIndex = rowIndex; lineColumn = foundLine; uidColumn = foundUid; nodeColumn = foundNode; break;
+            }
+          }
+          if (headerRowIndex < 0) continue;
+          for (const row of sheetRows.slice(headerRowIndex + 1)) {
+            const lineNumber = String(row?.[lineColumn] ?? '').trim();
+            const uid = String(row?.[uidColumn] ?? '').trim();
+            const node = String(row?.[nodeColumn] ?? '').trim();
+            if (!lineNumber && !uid && !node) continue;
+            parsedRows.push({ lineNumber, uid, node });
+          }
+        }
+        if (!parsedRows.length) throw new Error('LINE NUMBER, UID and NODE columns with data were not found.');
+        setRows(parsedRows);
+        setQuery('');
+        setFileName(file.name);
+        setMessage(parsedRows.length + ' rows loaded in original Excel sequence.');
+      } catch (error) {
+        setMessage('Could not read the Excel: ' + (error?.message || 'unknown error'));
+      }
+    };
+    return <main className="page support-validation-page">
+      <style>{`
+        .support-validation-top{background:linear-gradient(135deg,#102f4a,#194f73)}.support-validation-content{padding:28px!important;background:#f3f8fc}.support-validation-shell{max-width:1180px;margin:0 auto}.support-validation-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:18px;border:1px solid #d4e3ee;border-radius:18px;background:#fff;box-shadow:0 12px 30px rgba(23,50,77,.09)}.support-validation-search{box-sizing:border-box;flex:1 1 420px;min-width:220px;padding:13px 15px;border:1px solid #b9cfdf;border-radius:11px;color:#17324d;font-size:14px;outline:none}.support-validation-search:focus{border-color:#2498cb;box-shadow:0 0 0 3px rgba(36,152,203,.14)}.support-validation-upload{padding:13px 17px;border:0;border-radius:11px;background:#167fb4;color:#fff;font-weight:800;cursor:pointer}.support-validation-meta{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:12px 2px;color:#60788c;font-size:12px}.support-validation-table-wrap{overflow:auto;border:1px solid #cfe0ec;border-radius:16px;background:#fff;box-shadow:0 14px 32px rgba(23,50,77,.09)}.support-validation-table{width:100%;min-width:720px;border-collapse:collapse}.support-validation-table th,.support-validation-table td{padding:14px 16px;border-bottom:1px solid #dce8f1;text-align:left}.support-validation-table th{position:sticky;top:0;background:#167fb4;color:#fff;font-size:12px;letter-spacing:.05em}.support-validation-table td{color:#17324d;font-size:13px}.support-validation-table tbody tr:nth-child(even){background:#f4f9fc}.support-validation-table tbody tr:hover{background:#e3f2fa}.support-validation-empty{padding:46px 20px!important;text-align:center!important;color:#6a8193!important}.support-validation-index{width:70px;color:#1686bc!important;font-weight:800}@media(max-width:640px){.support-validation-content{padding:15px!important}.support-validation-controls{padding:13px}.support-validation-upload{width:100%}}
+      `}</style>
+      <header className="top support-validation-top"><button onClick={back}>Back</button><div><p>SUPPORT LOAD VALIDATION</p><h1>Support Validation</h1><span>{moduleName}</span></div></header>
+      <section className="content support-validation-content"><div className="support-validation-shell">
+        <div className="support-validation-controls"><input className="support-validation-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Line Number, UID or Node" aria-label="Search Line Number, UID or Node"/><button className="support-validation-upload" onClick={() => fileInputRef.current?.click()}>OPEN SUPPORT SUMMARY EXCEL</button><input ref={fileInputRef} hidden type="file" accept=".xlsx,.xls,.xlsm,.xlsb" onChange={loadSupportSummary}/></div>
+        <div className="support-validation-meta"><span><b>{fileName}</b> · {message}</span><span>Showing {filteredRows.length} of {rows.length}</span></div>
+        <div className="support-validation-table-wrap"><table className="support-validation-table"><thead><tr><th>SEQUENCE</th><th>LINE NUMBER</th><th>UID</th><th>NODE</th></tr></thead><tbody>{filteredRows.length ? filteredRows.map((row, index) => <tr key={row.lineNumber + '|' + row.uid + '|' + index}><td className="support-validation-index">{index + 1}</td><td>{row.lineNumber}</td><td>{row.uid}</td><td>{row.node}</td></tr>) : <tr><td className="support-validation-empty" colSpan="4">No matching Line Number, UID or Node found.</td></tr>}</tbody></table></div>
+      </div></section>
+    </main>;
+  }
+
 function SupportToolsPage({ moduleName, open, back }) {
+  const [supportValidationOpen, setSupportValidationOpen] = useState(false);
   const spanTools = ['≤2"', '3"-4"', '≥6"'];
   const loadTools = [
     'SUPPORT VALIDATION',
@@ -1523,6 +1593,7 @@ function SupportToolsPage({ moduleName, open, back }) {
     'SECONDARY SUPPORT VALIDATION AND SELECTION',
   ];
   const openBlank = (toolName) => open('SUPPORT TOOLS · ' + moduleName + ' · ' + toolName);
+  if (supportValidationOpen) return <SupportValidationPage moduleName={moduleName} back={() => setSupportValidationOpen(false)} />;
   return <main className="page support-tools-page">
     <style>{`
       .support-tools-top{background:linear-gradient(135deg,#102f4a,#194f73)}
@@ -1546,7 +1617,7 @@ function SupportToolsPage({ moduleName, open, back }) {
         <div className="support-tools-intro"><p>SUPPORT ENGINEERING</p><h2>Select a Support Tool</h2></div>
         <div className="support-tools-grid">
           <article className="support-tools-panel"><h3>Support Span Check</h3><div className="support-tools-buttons support-span-buttons">{spanTools.map((tool) => <button key={tool} onClick={() => openBlank(tool)}>{tool}</button>)}</div></article>
-          <article className="support-tools-panel"><h3>Support Load Validation</h3><div className="support-tools-buttons support-load-buttons">{loadTools.map((tool) => <button key={tool} onClick={() => openBlank(tool)}>{tool}</button>)}</div></article>
+          <article className="support-tools-panel"><h3>Support Load Validation</h3><div className="support-tools-buttons support-load-buttons">{loadTools.map((tool) => <button key={tool} onClick={() => tool === 'SUPPORT VALIDATION' ? setSupportValidationOpen(true) : openBlank(tool)}>{tool}</button>)}</div></article>
         </div>
       </div>
     </section>
