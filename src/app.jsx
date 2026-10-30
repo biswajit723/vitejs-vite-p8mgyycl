@@ -1583,75 +1583,28 @@ function LineStatusPage({ moduleName, data, back }) {
   }
 
 
-/* RGT_SUPPORT_CALCULATION_V1 */
-const SUPPORT_VALIDATION_FILE = '4193-SYS-1501-005_SUPPORT-SUMMARY';
-const SUPPORT_LOAD_CASES = ['OPE CIVIL/STR WEIGHT IN "kN"','BLAST WEIGHT IN "kN"','TRANSIT WEIGHT IN "kN"'];
-const SUPPORT_DIRECTIONS = ['PORT-STB','VERTICAL','VERTICAL (+VE)','FWD-AFT'];
-function svNorm(value){return String(value??'').toUpperCase().replace(/[^A-Z0-9+]+/g,'');}
-function svBookName(value){return String(value??'').toLowerCase().replace(/\.[^.]+$/,'').replace(/[^a-z0-9]+/g,'');}
-function svIsWorkbook(entry){const a=svBookName(entry?.file?.name),b=svBookName(SUPPORT_VALIDATION_FILE);return a===b||a.startsWith(b)||a.includes(b);}
-function svCell(row,index){return String(row?.[index]??'').trim();}
-function svNumber(value){const n=Number(value);return Number.isFinite(n)?n:null;}
-function svFind(row,names){const wanted=names.map(svNorm);return (row||[]).findIndex(value=>wanted.includes(svNorm(value)));}
-function svHeader(sheet){
-  const rows=sheet?.rows||[];
-  for(let top=0;top<Math.min(rows.length,80);top++){
-    const line=svFind(rows[top],['LINE NUMBER','LINE NO','LINE']);
-    const uid=svFind(rows[top],['UID','UNIQUE ID']);
-    const node=svFind(rows[top],['NODE','NODE NO']);
-    const supportType=svFind(rows[top],['SUPPORT TYPE']);
-    if(line<0||uid<0||node<0||supportType<0)continue;
-    const axial=svFind(rows[top],['AXIAL DIRECTION','AXIAL']);
-    const lateral=svFind(rows[top],['LATERAL DIRECTION','LATERAL']);
-    for(let directionRow=top;directionRow<=Math.min(top+3,rows.length-1);directionRow++){
-      const groups={};let active='';
-      for(let c=0;c<(rows[top]||[]).length;c++){
-        const name=svNorm(rows[top][c]);
-        if(name.includes('OPECIVIL')&&name.includes('WEIGHT'))active='OPE';
-        else if(name.includes('BLASTWEIGHT')&&!name.includes('DISP'))active='BLAST';
-        else if(name.includes('TRANSITWEIGHT'))active='TRANSIT';
-        else if(name&&['DRYWEIGHTINKN','HYDWEIGHTINKN','SUSWEIGHTINKN','THERMALWEIGHTINKN','OCCASIONALWEIGHTINKN','BLASTDISPWEIGHTINKN','MAXDISPLACEMENTSINMM','GUIDECHECK','STIFFNESSCHECK','FRICTIONCHECK','LIFTCHECK'].some(x=>name.includes(x)))active='';
-        if(!active)continue;
-        const direction=svNorm(rows[directionRow]?.[c]);
-        if(direction==='PORTSTB')groups[active+':PORT-STB']=c;
-        else if(direction==='VERTICAL')groups[active+':VERTICAL']=c;
-        else if(direction==='VERTICAL+VE')groups[active+':VERTICAL (+VE)']=c;
-        else if(direction==='FWDAFT')groups[active+':FWD-AFT']=c;
-      }
-      if(SUPPORT_LOAD_CASES.every((_,i)=>['OPE','BLAST','TRANSIT'][i]&&SUPPORT_DIRECTIONS.every(d=>d==='VERTICAL (+VE)'&&groups[['OPE','BLAST','TRANSIT'][i]+':'+d]===undefined?true:groups[['OPE','BLAST','TRANSIT'][i]+':'+d]!==undefined))){
-        if(['OPE','BLAST','TRANSIT'].every(g=>['PORT-STB','VERTICAL','FWD-AFT'].every(d=>groups[g+':'+d]!==undefined)))return{top,directionRow,line,uid,node,supportType,axial,lateral,groups};
-      }
-    }
-  }
-  return null;
-}
-function svComponents(text){
-  return String(text??'').toUpperCase().split('+').map(part=>part.trim()).map(part=>{
-    const code=part.match(/^(DS|HD|G|R)\b/)?.[1];if(!code)return null;
-    let direction=code==='R'?'VERTICAL':code==='HD'?'VERTICAL (+VE)':null;
-    if(code==='G'||code==='DS'){const m=part.match(/\((PORT\s*-?\s*STB|FWD\s*-?\s*AFT)\)/i);if(m)direction=svNorm(m[1])==='PORTSTB'?'PORT-STB':'FWD-AFT';}
-    return direction?{code,direction,label:code+(code==='G'||code==='DS'?' ('+direction+')':'')}:null;
-  }).filter(Boolean);
-}
-function svCalculate(row,header,supportType){
-  return svComponents(supportType).map(component=>{
-    const values=['OPE','BLAST','TRANSIT'].map(loadCase=>{const column=header.groups[loadCase+':'+component.direction];const value=column===undefined?null:svNumber(row[column]);return{loadCase,value};});
-    const available=values.filter(item=>item.value!==null);
-    const governing=available.reduce((best,item)=>!best||Math.abs(item.value)>Math.abs(best.value)?item:best,null);
-    const kg=governing?Math.round(Math.abs(governing.value)*102):null;
-    return{...component,values,governing,kg};
-  });
-}
-function svRows(workbooks){
-  const books=(workbooks||[]).filter(svIsWorkbook);const source=books.length?books:(workbooks||[]).filter(book=>(book.sheets||[]).some(svHeader));const out=[];
-  for(const book of source)for(const sheet of book.sheets||[]){const header=svHeader(sheet);if(!header)continue;const rows=sheet.rows||[];for(let i=Math.max(header.top,header.directionRow)+1;i<rows.length;i++){const row=rows[i]||[];const item={line:svCell(row,header.line),uid:svCell(row,header.uid),node:svCell(row,header.node),supportType:svCell(row,header.supportType),axial:header.axial>=0?svCell(row,header.axial):'',lateral:header.lateral>=0?svCell(row,header.lateral):'',sequence:out.length+1};if(item.line||item.uid||item.node){item.results=svCalculate(row,header,item.supportType);out.push(item);}}}return out;
-}
-function SupportValidationConnectedPage({workbooks,title,back}){
-  const[query,setQuery]=useState('');const[selected,setSelected]=useState(null);const rows=useMemo(()=>svRows(workbooks),[workbooks]);
-  const shown=useMemo(()=>{const q=query.trim().toLowerCase();return q?rows.filter(r=>[r.line,r.uid,r.node].some(v=>v.toLowerCase().includes(q))):rows;},[rows,query]);
-  useEffect(()=>{if(selected&&!rows.some(r=>r.sequence===selected.sequence))setSelected(null);},[rows,selected]);
-  return <main className="page"><style>{`.sv-wrap{padding:24px;background:#f3f8fc;min-height:calc(100vh - 120px)}.sv-grid{max-width:1400px;margin:auto;display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:18px}.sv-card{background:#fff;border:1px solid #d4e4ef;border-radius:18px;overflow:hidden;box-shadow:0 16px 40px rgba(16,47,74,.11)}.sv-head{padding:18px 20px;background:#dceaf5}.sv-head h2{margin:0;color:#17324d}.sv-head p{margin:6px 0 0;color:#167fac;font-weight:800}.sv-search{padding:14px 18px;display:flex;gap:12px;align-items:center}.sv-search input{flex:1;padding:12px 14px;border:1px solid #b8cfdf;border-radius:10px}.sv-tablebox{overflow:auto;max-height:650px}.sv-table{width:100%;border-collapse:collapse;min-width:700px}.sv-table th{position:sticky;top:0;background:#1785b9;color:white;padding:12px;text-align:left}.sv-table td{padding:11px 12px;border-bottom:1px solid #e3edf4}.sv-table tbody tr{cursor:pointer}.sv-table tbody tr:hover,.sv-table tbody tr.sel{background:#e6f5fc}.sv-empty{padding:55px 20px;text-align:center;color:#557086}.sv-detail{padding:18px}.sv-detail h3{margin:0 0 15px;color:#17324d}.sv-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}.sv-meta div,.sv-result{padding:10px;border-radius:10px;background:#f3f8fc}.sv-meta b,.sv-result small{display:block;color:#5d7689;font-size:11px}.sv-support{padding:12px;margin-bottom:14px;border-radius:10px;background:#173f61;color:#fff;font-weight:800}.sv-result{margin-bottom:10px;border-left:5px solid #1785b9}.sv-result strong{font-size:20px;color:#17324d}.sv-loads{margin-top:7px;font-size:12px;color:#536d80;line-height:1.55}.sv-note{font-size:11px;color:#71889a}@media(max-width:950px){.sv-grid{grid-template-columns:1fr}.sv-detail-card{order:-1}}@media(max-width:700px){.sv-wrap{padding:12px}.sv-search{align-items:stretch;flex-direction:column}}`}</style><header className="top"><button onClick={back}>Back</button><div><p>SUPPORT LOAD VALIDATION</p><h1>Support Validation</h1><span>{title}</span></div></header><section className="sv-wrap"><div className="sv-grid"><div className="sv-card"><div className="sv-head"><h2>Line Number · UID · Node</h2><p>{SUPPORT_VALIDATION_FILE}</p></div>{rows.length?<><div className="sv-search"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search Line Number, UID or Node"/><b>{shown.length} / {rows.length}</b></div><div className="sv-tablebox"><table className="sv-table"><thead><tr><th>SL.</th><th>LINE NUMBER</th><th>UID</th><th>NODE</th></tr></thead><tbody>{shown.map(r=><tr className={selected?.sequence===r.sequence?'sel':''} onClick={()=>setSelected(r)} key={r.sequence+'|'+r.line+'|'+r.uid+'|'+r.node}><td>{r.sequence}</td><td>{r.line}</td><td>{r.uid}</td><td>{r.node}</td></tr>)}</tbody></table>{!shown.length?<div className="sv-empty">No matching data found.</div>:null}</div></>:<div className="sv-empty">Connected folder-e {SUPPORT_VALIDATION_FILE} ebong required load columns paoa jayni.</div>}</div><aside className="sv-card sv-detail-card"><div className="sv-detail">{selected?<><h3>Calculated Support Loads</h3><div className="sv-meta"><div><b>LINE NUMBER</b>{selected.line}</div><div><b>UID</b>{selected.uid}</div><div><b>NODE</b>{selected.node}</div><div><b>AXIAL / LATERAL</b>{selected.axial||'-'} / {selected.lateral||'-'}</div></div><div className="sv-support">{selected.supportType||'No Support Type'}</div>{selected.results.length?selected.results.map((result,index)=><div className="sv-result" key={result.label+'|'+index}><small>{result.label} · {result.direction}</small><strong>{result.kg===null?'No data':result.kg.toLocaleString()+' kg'}</strong><div className="sv-loads">{result.values.map(v=><div key={v.loadCase}>{v.loadCase}: {v.value===null?'-':v.value+' kN'}</div>)}{result.governing?<b>Governing: {result.governing.loadCase} · |{result.governing.value}| × 102</b>:null}</div></div>):<div className="sv-empty">Support Type-e R, G, HD ba DS component paoa jayni.</div>}<p className="sv-note">R = VERTICAL · HD = VERTICAL (+VE) · G/DS = bracket-er PORT-STB ba FWD-AFT. Blast factor apply hoyni.</p></>:<div className="sv-empty">Calculation dekhte Line Number, UID ba Node row-te click korun.</div>}</div></aside></div></section></main>;
-}
+/* RGT_SUPPORT_EXCEL_LAYOUT_V1 */
+/* RGT_SUPPORT_HEADER_AXIAL_SIZE_V1 */
+const SUPPORT_VALIDATION_FILE='4193-SYS-1501-005_SUPPORT-SUMMARY';
+const SV_CASES=['OPE','BLAST','TRANSIT'];
+const SV_DIRS=['PORT-STB','VERTICAL','VERTICAL (+VE)','FWD-AFT'];
+function svN(v){return String(v??'').toUpperCase().replace(/[^A-Z0-9+]+/g,'');}
+function svBN(v){return String(v??'').toLowerCase().replace(/\.[^.]+$/,'').replace(/[^a-z0-9]+/g,'');}
+function svWorkbook(e){const a=svBN(e?.file?.name),b=svBN(SUPPORT_VALIDATION_FILE);return a===b||a.startsWith(b)||a.includes(b);}
+function svFind(row,names){const n=names.map(svN);return(row||[]).findIndex(v=>n.includes(svN(v)));}
+function svVal(row,i){return i>=0?String(row?.[i]??'').trim():'';}
+function svNum(v){const n=Number(v);return Number.isFinite(n)?n:null;}
+function svClean(n){if(n===null)return'';return Number(n.toFixed(3));}
+function svHeader(sheet){const rows=sheet?.rows||[];for(let top=0;top<Math.min(rows.length,80);top++){
+ const line=svFind(rows[top],['LINE NUMBER','LINE NO','LINE']);const uid=svFind(rows[top],['UID','UNIQUE ID']);const node=svFind(rows[top],['NODE','NODE NO']);const support=svFind(rows[top],['SUPPORT TYPE']);if(line<0||uid<0||node<0||support<0)continue;
+ const base={line,uid,node,support,sps:svFind(rows[top],['SPS TAG','LINE NUMBER FROM E3D']),axial:svFind(rows[top],['AXIAL DIRECTION','AXIAL']),lateral:svFind(rows[top],['LATERAL DIRECTION','LATERAL']),level:svFind(rows[top],['LEVEL','LEVEL L1']),size:svFind(rows[top],['SIZE']),branch:svFind(rows[top],['BRANCH SIZE']),material:svFind(rows[top],['MATERIAL']),insulation:svFind(rows[top],['INSULATION']),slope:svFind(rows[top],['SLOPE']),selected:svFind(rows[top],['SELECTED SUPPORT TYPE-AS PER SUPPORT STD','SELECTED SUPPORT TYPE']),status:svFind(rows[top],['STATUS'])};
+ for(let dr=top;dr<=Math.min(top+3,rows.length-1);dr++){const groups={};let active='';for(let c=0;c<(rows[top]||[]).length;c++){const h=svN(rows[top][c]);if(h.includes('OPECIVIL')&&h.includes('WEIGHT'))active='OPE';else if(h.includes('BLASTWEIGHT')&&!h.includes('DISP'))active='BLAST';else if(h.includes('TRANSITWEIGHT'))active='TRANSIT';else if(h&&['DRYWEIGHT','HYDWEIGHT','SUSWEIGHT','THERMALWEIGHT','OCCASIONALWEIGHT','BLASTDISP','MAXDISPLACEMENTS','GUIDECHECK','STIFFNESSCHECK','FRICTIONCHECK','LIFTCHECK'].some(x=>h.includes(x)))active='';if(!active)continue;const d=svN(rows[dr]?.[c]);if(d==='PORTSTB')groups[active+':PORT-STB']=c;else if(d==='VERTICAL')groups[active+':VERTICAL']=c;else if(d==='VERTICAL+VE')groups[active+':VERTICAL (+VE)']=c;else if(d==='FWDAFT')groups[active+':FWD-AFT']=c;}
+ if(SV_CASES.every(g=>['PORT-STB','VERTICAL','FWD-AFT'].every(d=>groups[g+':'+d]!==undefined)))return{...base,top,dr,groups};}
+ }return null;}
+function svMax(row,h,dir){const vals=SV_CASES.map(c=>({name:c,value:svNum(row[h.groups[c+':'+dir]])})).filter(x=>x.value!==null);return vals.reduce((b,x)=>!b||Math.abs(x.value)>Math.abs(b.value)?x:b,null);}
+function svRows(workbooks){const named=(workbooks||[]).filter(svWorkbook);const books=named.length?named:(workbooks||[]).filter(b=>(b.sheets||[]).some(svHeader));const out=[];for(const book of books)for(const sheet of book.sheets||[]){const h=svHeader(sheet);if(!h)continue;for(const row of (sheet.rows||[]).slice(Math.max(h.top,h.dr)+1)){const line=svVal(row,h.line),uid=svVal(row,h.uid),node=svVal(row,h.node);if(!line&&!uid&&!node)continue;const max=Object.fromEntries(SV_DIRS.map(d=>[d,svMax(row,h,d)]));const governing=SV_DIRS.map(d=>max[d]).filter(Boolean).reduce((b,x)=>!b||Math.abs(x.value)>Math.abs(b.value)?x:b,null);const lineParts=line.split('-');const derivedSize=(lineParts[2]||'').trim();out.push({sps:svVal(row,h.sps),supportNumber:uid,line,level:svVal(row,h.level),uid,node,axial:svVal(row,h.axial),size:derivedSize,branch:svVal(row,h.branch),material:svVal(row,h.material),insulation:svVal(row,h.insulation),slope:svVal(row,h.slope),supportType:svVal(row,h.support),selected:svVal(row,h.selected),status:svVal(row,h.status),max,governing});}}return out;}
+function SupportValidationConnectedPage({workbooks,title,back}){const[query,setQuery]=useState('');const rows=useMemo(()=>svRows(workbooks),[workbooks]);const shown=useMemo(()=>{const q=query.trim().toLowerCase();return q?rows.filter(r=>Object.values(r).some(v=>typeof v==='string'&&v.toLowerCase().includes(q))):rows;},[rows,query]);const cell=(r,d,kg=false)=>{const x=r.max[d];return x?(kg?Math.round(Math.abs(x.value)*102):svClean(x.value)):'';};
+ return <main className="page"><style>{`.svx-wrap{padding:20px;background:#eef6fb;min-height:calc(100vh - 120px)}.svx-card{background:#252525;border-radius:16px;overflow:hidden;box-shadow:0 16px 40px rgba(0,0,0,.18)}.svx-head{padding:16px 18px;background:#173f61;color:#fff}.svx-head h2{margin:0}.svx-head p{margin:5px 0 0;color:#8edcff;font-weight:800}.svx-search{display:flex;gap:12px;align-items:center;padding:14px;background:#fff}.svx-search input{flex:1;padding:12px 14px;border:1px solid #a9c6da;border-radius:9px}.svx-search b{white-space:nowrap;color:#17324d}.svx-scroll{overflow:auto;max-height:690px}.svx-table{border-collapse:separate;border-spacing:0;min-width:2850px;width:100%;background:#252525;color:#fff}.svx-table th,.svx-table td{border-right:1px solid #b9b9b9;border-bottom:1px solid #777;padding:9px 8px;vertical-align:middle}.svx-table th{position:sticky;top:0;z-index:2;background:#454545;color:#fff!important;font-size:11px;white-space:normal;text-transform:uppercase}.svx-table th.load,.svx-table th.id,.svx-table th.branch{color:#fff!important}.svx-table td{font-size:12px;white-space:nowrap}.svx-table tbody tr:nth-child(even){background:#303030}.svx-table tbody tr:hover{background:#174b68}.svx-empty{padding:60px;text-align:center;background:#fff;color:#536d80}@media(max-width:700px){.svx-wrap{padding:8px}.svx-search{align-items:stretch;flex-direction:column}}`}</style><header className="top"><button onClick={back}>Back</button><div><p>SUPPORT LOAD VALIDATION</p><h1>Support Validation</h1><span>{title}</span></div></header><section className="svx-wrap"><div className="svx-card"><div className="svx-head"><h2>Support Selection Output</h2><p>{SUPPORT_VALIDATION_FILE}</p></div><div className="svx-search"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search any Excel data"/><b>{shown.length} / {rows.length}</b></div>{rows.length?<div className="svx-scroll"><table className="svx-table"><thead><tr><th className="id">LINE NUMBER FROM E3D</th><th className="id">Support Number from E3D Based on Unique Line Number</th><th className="id">LINE NUMBER</th><th className="id">Level “L1”</th><th className="load">UID</th><th className="load">NODE</th><th>AXIAL DIRECTION</th><th>SIZE</th><th className="branch">Branch Size</th><th>Material</th><th>Insulation</th><th className="load">Slope</th><th className="load">Max PORT-STB (kN)</th><th className="load">Max VERTICAL (kN)</th><th className="load">Max VERTICAL (+VE) (kN)</th><th className="load">Max FWD-AFT (kN)</th><th className="load">PORT-STB (kg)</th><th className="load">VERTICAL (kg)</th><th className="load">VERTICAL (+VE) (kg)</th><th className="load">FWD-AFT (kg)</th><th className="load">Governing Load Case</th><th className="load">SUPPORT TYPE</th><th>Selected Support Type-AS PER SUPPORT STD</th><th>Status</th></tr></thead><tbody>{shown.map((r,i)=><tr key={r.uid+'|'+r.node+'|'+i}><td>{r.sps}</td><td>{r.supportNumber}</td><td>{r.line}</td><td>{r.level}</td><td>{r.uid}</td><td>{r.node}</td><td>{r.axial}</td><td>{r.size}</td><td>{r.branch}</td><td>{r.material}</td><td>{r.insulation}</td><td>{r.slope}</td><td>{cell(r,'PORT-STB')}</td><td>{cell(r,'VERTICAL')}</td><td>{cell(r,'VERTICAL (+VE)')}</td><td>{cell(r,'FWD-AFT')}</td><td>{cell(r,'PORT-STB',true)}</td><td>{cell(r,'VERTICAL',true)}</td><td>{cell(r,'VERTICAL (+VE)',true)}</td><td>{cell(r,'FWD-AFT',true)}</td><td>{r.governing?r.governing.name+': '+svClean(r.governing.value)+' kN':''}</td><td>{r.supportType}</td><td>{r.selected}</td><td>{r.status}</td></tr>)}</tbody></table></div>:<div className="svx-empty">Connected folder-e required Support Summary Excel data paoa jayni.</div>}</div></section></main>;}
 
 function SupportToolsPage({ moduleName, open, back, projectLabel, workbooks = [] }) {
   const [supportValidationOpen, setSupportValidationOpen] = useState(false);
