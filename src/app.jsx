@@ -1187,7 +1187,7 @@ export default function App() {
   const blank = (nextTitle, previousPage) => { setTitle(nextTitle); setFrom(previousPage); go('blank'); };
   if (page === 'reports') return <Reports back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'reports')} excelSession={excelSession} setExcelSession={setExcelSession} />;
   if (page === 'iso-planning-dashboard') return <><IsoPlanningDashboardPage workbooks={excelSession.workbooks} back={() => go('home')} openExcel={() => setExcelViewerOpen(true)} />{excelViewerOpen ? <ExcelWorkbookViewer existingWorkbooks={excelSession.workbooks} onClose={() => setExcelViewerOpen(false)} /> : null}</>;
-  if (page === 'support-tools') return <SupportToolsPage projectLabel={supportProject.code + ' · ' + supportProject.name} open={(nextTitle) => blank(nextTitle, 'support-tools')} back={() => go('home')} />;
+  if (page === 'support-tools') return <SupportToolsPage projectLabel={supportProject.code + ' · ' + supportProject.name} workbooks={excelSession.workbooks} open={(nextTitle) => blank(nextTitle, 'support-tools')} back={() => go('home')} />;
   if (page === 'iso-planning') return <IsoPlanningManagementPage workbooks={excelSession.workbooks} back={() => go('home')} open={(nextTitle) => blank(nextTitle, 'iso-planning')} />;
   if (page === 'blank') return <Layout title={title} sub="Content Placeholder" back={() => go(from)}><div className="blank"><b>RGT</b><p>CONTENT PLACEHOLDER</p><h2>{title}</h2><span>No project data or report has been added to this page yet.</span><button onClick={() => go(from)}>Return to Previous Page</button></div></Layout>;
   return <Home isoPlanning={() => go('iso-planning-dashboard')} reports={() => go('reports')} supportTools={(code, name) => { setSupportProject({ code, name }); go('support-tools'); }} blank={(nextTitle) => blank(nextTitle, 'home')} />;
@@ -1406,7 +1406,7 @@ function Reports({ back, open, excelSession, setExcelSession }) {
     return <LineStatusPage moduleName={selected} data={lineStatus} back={() => setStatusView(null)} />;
   }
   if (statusView === 'SUPPORT TOOLS' && selected) {
-    return <SupportToolsPage moduleName={selected} open={open} back={() => setStatusView(null)} />;
+    return <SupportToolsPage moduleName={selected} workbooks={workbooks} open={open} back={() => setStatusView(null)} />;
   }
 
   const openIntegrated = (item) => {
@@ -1582,8 +1582,63 @@ function LineStatusPage({ moduleName, data, back }) {
     </main>;
   }
 
-function SupportToolsPage({ moduleName, open, back }) {
+
+/* RGT_SUPPORT_VALIDATION_FINAL_V1 */
+/* RGT_SUPPORT_CONNECTED_DATA_FIX_V1 */
+const SUPPORT_VALIDATION_FILE = '4193-SYS-1501-005_SUPPORT-SUMMARY';
+function supportValidationNorm(value){ return String(value ?? '').toLowerCase().replace(/\.[^.]+$/,'').replace(/[^a-z0-9]+/g,''); }
+function supportValidationWorkbook(entry){
+  const actual = supportValidationNorm(entry?.file?.name);
+  const expected = supportValidationNorm(SUPPORT_VALIDATION_FILE);
+  return actual === expected || actual.startsWith(expected) || actual.includes(expected);
+}
+function supportValidationColumn(row,names){ return (row||[]).findIndex(cell=>names.includes(supportValidationNorm(cell))); }
+function supportValidationSheetData(sheet){
+  const rows=sheet?.rows||[];
+  for(let i=0;i<Math.min(rows.length,100);i++){
+    const columns={
+      line:supportValidationColumn(rows[i],['linenumber','lineno','lineno','line','pipelinenumber']),
+      uid:supportValidationColumn(rows[i],['uid','uniqueid','uniqueidentifier']),
+      node:supportValidationColumn(rows[i],['node','nodename','nodeno','nodenumber'])
+    };
+    if(columns.line>=0&&columns.uid>=0&&columns.node>=0) return {header:i,columns};
+  }
+  return null;
+}
+function supportValidationBookHasColumns(entry){ return (entry?.sheets||[]).some(sheet=>Boolean(supportValidationSheetData(sheet))); }
+function supportValidationSourceBooks(workbooks){
+  const books=workbooks||[];
+  const named=books.filter(supportValidationWorkbook);
+  if(named.length) return named;
+  return books.filter(supportValidationBookHasColumns);
+}
+function supportValidationRows(workbooks){
+  const out=[];
+  for(const book of supportValidationSourceBooks(workbooks)){
+    for(const sheet of book.sheets||[]){
+      const match=supportValidationSheetData(sheet);
+      if(!match) continue;
+      const rows=sheet.rows||[], cols=match.columns;
+      for(let i=match.header+1;i<rows.length;i++){
+        const r=rows[i]||[];
+        const item={line:String(r[cols.line]??'').trim(),uid:String(r[cols.uid]??'').trim(),node:String(r[cols.node]??'').trim(),sequence:out.length+1};
+        if(item.line||item.uid||item.node) out.push(item);
+      }
+    }
+  }
+  return out;
+}
+function SupportValidationConnectedPage({workbooks,title,back}){
+  const [query,setQuery]=useState('');
+  const rows=useMemo(()=>supportValidationRows(workbooks),[workbooks]);
+  const connected=useMemo(()=>supportValidationSourceBooks(workbooks).length>0,[workbooks]);
+  const shown=useMemo(()=>{const q=query.trim().toLowerCase();return q?rows.filter(r=>[r.line,r.uid,r.node].some(v=>v.toLowerCase().includes(q))):rows;},[rows,query]);
+  return <main className="page"><style>{`.sv-wrap{padding:28px;background:#f3f8fc;min-height:calc(100vh - 120px)}.sv-card{max-width:1150px;margin:auto;background:#fff;border:1px solid #d4e4ef;border-radius:18px;overflow:hidden;box-shadow:0 16px 40px rgba(16,47,74,.12)}.sv-head{padding:20px 22px;background:#dceaf5}.sv-head h2{margin:0;color:#17324d}.sv-head p{margin:6px 0 0;color:#167fac;font-weight:800}.sv-search{padding:16px 22px;display:flex;gap:12px;align-items:center}.sv-search input{flex:1;padding:12px 14px;border:1px solid #b8cfdf;border-radius:10px}.sv-tablebox{overflow:auto;max-height:620px}.sv-table{width:100%;border-collapse:collapse;min-width:650px}.sv-table th{position:sticky;top:0;background:#1785b9;color:white;padding:12px;text-align:left}.sv-table td{padding:11px 12px;border-bottom:1px solid #e3edf4}.sv-empty{padding:60px 22px;text-align:center;color:#557086}@media(max-width:700px){.sv-wrap{padding:12px}.sv-search{align-items:stretch;flex-direction:column}}`}</style><header className="top"><button onClick={back}>Back</button><div><p>SUPPORT LOAD VALIDATION</p><h1>Support Validation</h1><span>{title}</span></div></header><section className="sv-wrap"><div className="sv-card"><div className="sv-head"><h2>Line Number · UID · Node</h2><p>{SUPPORT_VALIDATION_FILE}</p></div>{connected&&rows.length?<><div className="sv-search"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search Line Number, UID or Node"/><b>{shown.length} / {rows.length}</b></div><div className="sv-tablebox"><table className="sv-table"><thead><tr><th>SL.</th><th>LINE NUMBER</th><th>UID</th><th>NODE</th></tr></thead><tbody>{shown.map(r=><tr key={r.sequence+'|'+r.line+'|'+r.uid+'|'+r.node}><td>{r.sequence}</td><td>{r.line}</td><td>{r.uid}</td><td>{r.node}</td></tr>)}</tbody></table>{!shown.length?<div className="sv-empty">No matching data found.</div>:null}</div></>:<div className="sv-empty">{connected?'Line Number, UID and Node columns were found, but no data rows are available.':'Connected folder does not contain '+SUPPORT_VALIDATION_FILE+' or another workbook with Line Number, UID and Node columns.'}</div>}</div></section></main>;
+}
+function SupportToolsPage({ moduleName, open, back, projectLabel, workbooks = [] }) {
   const [supportValidationOpen, setSupportValidationOpen] = useState(false);
+  const supportValidationTitle = moduleName || projectLabel || '4193 · HAMMER HEAD';
+  if (supportValidationOpen) return <SupportValidationConnectedPage workbooks={workbooks} title={supportValidationTitle} back={() => setSupportValidationOpen(false)} />;
   const spanTools = ['≤2"', '3"-4"', '≥6"'];
   const loadTools = [
     'SUPPORT VALIDATION',
@@ -1592,8 +1647,7 @@ function SupportToolsPage({ moduleName, open, back }) {
     'PRIMARY SUPPORT SELECTION',
     'SECONDARY SUPPORT VALIDATION AND SELECTION',
   ];
-  const openBlank = (toolName) => open('SUPPORT TOOLS · ' + moduleName + ' · ' + toolName);
-  if (supportValidationOpen) return <SupportValidationPage moduleName={moduleName} back={() => setSupportValidationOpen(false)} />;
+  const openBlank = (toolName) => { if (toolName === 'SUPPORT VALIDATION') { setSupportValidationOpen(true); return; } open('SUPPORT TOOLS · ' + supportValidationTitle + ' · ' + toolName); };
   return <main className="page support-tools-page">
     <style>{`
       .support-tools-top{background:linear-gradient(135deg,#102f4a,#194f73)}
@@ -1610,7 +1664,7 @@ function SupportToolsPage({ moduleName, open, back }) {
     `}</style>
     <header className="top support-tools-top">
       <button onClick={back}>Back</button>
-      <div><p>REPORTS GENERATE TOOLS</p><h1>Support Tools</h1><span>{moduleName}</span></div>
+      <div><p>REPORTS GENERATE TOOLS</p><h1>Support Tools</h1><span>{supportValidationTitle}</span></div>
     </header>
     <section className="content support-tools-content">
       <div className="support-tools-shell">
